@@ -1,0 +1,25 @@
+name: ml_kit_demo
+description: "Flutter ML Kit Demo - Gesture Recognition"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.11.1
+  google_mlkit_face_detection: ^0.13.2
+  google_mlkit_face_mesh_detection: ^0.4.2
+  google_mlkit_commons: ^0.11.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
