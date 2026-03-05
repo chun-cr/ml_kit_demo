@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'screens/home_screen.dart';
+import 'screens/face_detection_screen.dart';
 import 'gesture_screen.dart';
 
 void main() async {
@@ -75,7 +75,7 @@ class _MainNavScreenState extends State<MainNavScreen> {
         children: [
           // 不使用 IndexedStack 缓存，而是用 key 切换来释放摄像头
           _currentIndex == 0
-              ? HomeScreen(key: ValueKey('face_$_faceKey'))
+              ? FaceDetectionScreen(key: ValueKey('face_$_faceKey'))
               : const SizedBox.shrink(),
           _currentIndex == 1
               ? GestureScreen(key: ValueKey('gesture_$_gestureKey'))

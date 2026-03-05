@@ -69,11 +69,11 @@ class _GestureScreenState extends State<GestureScreen>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   // ── 相机相关 ─────────────────────────────────────────────────
   CameraController? _controller;
-  bool _isCameraReady = false;
-  bool _isCameraInitialized = false;
-  bool _isCameraInitializing = false;
   bool _isDisposed = false;
   String? _errorMessage;
+
+  // ── 整体初始化状态 ──────────────────────────────────────────
+  bool _isInitialized = false;
 
   // ── 通道 ────────────────────────────────────────────────────
   static const _methodChannel = MethodChannel('gesture/frame');
@@ -84,7 +84,7 @@ class _GestureScreenState extends State<GestureScreen>
 
   // ── 帧率节流（发送给原生层）────────────────────────────────
   int _lastFrameTime = 0;
-  static const _frameIntervalMs = 30; // 30ms 发一帧给原生层（匹配关键点刷新率）
+  static const _frameIntervalMs = 30; // 30ms 发一帧给原生层
   bool _isProcessing = false;
 
   // ── 手势结果 ────────────────────────────────────────────────
@@ -113,27 +113,29 @@ class _GestureScreenState extends State<GestureScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _initCamera();
     _listenGestureStream();
     _listenLandmarkStream();
+    _initAll();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_isDisposed) return;
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
 
-    if (state == AppLifecycleState.inactive) {
-      _stopImageStream();
-      controller.dispose();
-      _controller = null;
-      _isCameraReady = false;
-      _isCameraInitialized = false;
-      _isCameraInitializing = false;
-      if (mounted) setState(() {});
-    } else if (state == AppLifecycleState.resumed) {
-      _initCamera();
+    switch (state) {
+      case AppLifecycleState.inactive:
+        // 上滑查看后台时触发，不释放相机，画面自然定格在最后一帧
+        break;
+      case AppLifecycleState.paused:
+        // 真正进入后台才释放相机资源
+        _releaseCamera();
+        break;
+      case AppLifecycleState.resumed:
+        // 回到前台重新初始化
+        _initAll();
+        break;
+      default:
+        break;
     }
   }
 
@@ -150,10 +152,40 @@ class _GestureScreenState extends State<GestureScreen>
     super.dispose();
   }
 
+  // ── 释放相机资源 ──────────────────────────────────────────────
+  void _releaseCamera() {
+    _stopImageStream();
+    _controller?.dispose();
+    _controller = null;
+    if (mounted) {
+      setState(() => _isInitialized = false);
+    }
+  }
+
+  // ── 统一初始化（相机并行）─────────────────────────────────────
+  Future<void> _initAll() async {
+    if (_isDisposed) return;
+    if (mounted) setState(() => _isInitialized = false);
+
+    try {
+      // 手势识别的 MediaPipe 初始化在原生层 (MainActivity/AppDelegate) 完成，
+      // Flutter 端只需初始化相机
+      await _initCamera();
+
+      if (_isDisposed) return;
+
+      if (_controller != null && _controller!.value.isInitialized) {
+        _startImageStream();
+        if (mounted) setState(() => _isInitialized = true);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _errorMessage = '初始化失败：$e');
+    }
+  }
+
   // ── 初始化相机 ──────────────────────────────────────────────
   Future<void> _initCamera() async {
-    if (_isDisposed || _isCameraInitialized || _isCameraInitializing) return;
-    _isCameraInitializing = true;
+    if (_isDisposed) return;
 
     try {
       final cameras = await availableCameras();
@@ -177,17 +209,9 @@ class _GestureScreenState extends State<GestureScreen>
       );
 
       await _controller!.initialize();
-      if (_isDisposed) return;
-
-      _isCameraInitialized = true;
-      if (mounted) setState(() => _isCameraReady = true);
-
-      _startImageStream();
     } catch (e) {
-      _isCameraInitialized = false;
+      debugPrint('[Gesture] Camera init error: $e');
       if (mounted) setState(() => _errorMessage = '摄像头初始化失败：$e');
-    } finally {
-      _isCameraInitializing = false;
     }
   }
 
@@ -195,19 +219,24 @@ class _GestureScreenState extends State<GestureScreen>
   void _startImageStream() {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
+    if (controller.value.isStreamingImages) return;
 
-    controller.startImageStream((CameraImage image) {
-      if (_isDisposed || _isProcessing) return;
+    try {
+      controller.startImageStream((CameraImage image) {
+        if (_isDisposed || _isProcessing) return;
 
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastFrameTime < _frameIntervalMs) return;
-      _lastFrameTime = now;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastFrameTime < _frameIntervalMs) return;
+        _lastFrameTime = now;
 
-      _isProcessing = true;
-      _sendFrameToNative(image).whenComplete(() {
-        _isProcessing = false;
+        _isProcessing = true;
+        _sendFrameToNative(image).whenComplete(() {
+          _isProcessing = false;
+        });
       });
-    });
+    } catch (e) {
+      debugPrint('[Gesture] Failed to start stream: $e');
+    }
   }
 
   // ── 停止帧流 ────────────────────────────────────────────────
@@ -221,6 +250,8 @@ class _GestureScreenState extends State<GestureScreen>
 
   // ── 将相机帧发送给原生层 ───────────────────────────────────
   Future<void> _sendFrameToNative(CameraImage image) async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+
     try {
       final bytes = _concatenatePlanes(image.planes);
       final width = image.width;
@@ -319,7 +350,9 @@ class _GestureScreenState extends State<GestureScreen>
     if (_errorMessage != null) {
       return _buildErrorView();
     }
-    if (!_isCameraReady || _controller == null) {
+    if (!_isInitialized ||
+        _controller == null ||
+        !_controller!.value.isInitialized) {
       return _buildLoadingView();
     }
     return _buildMainView();

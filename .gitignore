@@ -49,3 +49,34 @@ android/app/build/
 build/
 *.apk
 *.aab
+
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+
+# Android
+android/app/debug/
+android/app/profile/
+android/app/release/
+*.apk
+*.aab
+*.keystore
+
+# iOS 编译产物
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Pods/
+ios/.symlinks/
+ios/Runner.xcworkspace/xcshareddata/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统文件
+.DS_Store
+Thumbs.db
