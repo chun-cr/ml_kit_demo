@@ -6,6 +6,8 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'utils/adaptive_throttle.dart';
+
 /// 手势 → Emoji 映射
 const Map<String, String> _gestureEmojis = {
   'Open_Palm': '🖐️',
@@ -82,10 +84,14 @@ class _GestureScreenState extends State<GestureScreen>
   StreamSubscription? _gestureSubscription;
   StreamSubscription? _landmarkSubscription;
 
-  // ── 帧率节流（发送给原生层）────────────────────────────────
-  int _lastFrameTime = 0;
-  static const _frameIntervalMs = 30; // 30ms 发一帧给原生层
-  bool _isProcessing = false;
+  // ── 自适应帧率控制 ────────────────────────────────────────────
+  final _detectThrottle = AdaptiveThrottle(); // 发送帧到原生层频率（自适应）
+  final _paintThrottle = AdaptiveThrottle(
+    // 描点刷新（固定 30ms）
+    minInterval: 30,
+    maxInterval: 30,
+    adaptive: false,
+  );
 
   // ── 手势结果 ────────────────────────────────────────────────
   String _gesture = 'None';
@@ -215,7 +221,7 @@ class _GestureScreenState extends State<GestureScreen>
     }
   }
 
-  // ── 开始帧流 ────────────────────────────────────────────────
+  // ── 开始帧流 ────────────────────────────────────────────
   void _startImageStream() {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
@@ -223,15 +229,23 @@ class _GestureScreenState extends State<GestureScreen>
 
     try {
       controller.startImageStream((CameraImage image) {
-        if (_isDisposed || _isProcessing) return;
+        if (_isDisposed) return;
 
-        final now = DateTime.now().millisecondsSinceEpoch;
-        if (now - _lastFrameTime < _frameIntervalMs) return;
-        _lastFrameTime = now;
+        // 描点刷新：固定高频（用缓存数据，不重新检测）
+        if (_paintThrottle.shouldProcess()) {
+          if (mounted) setState(() {});
+        }
 
-        _isProcessing = true;
+        // 检测：自适应频率
+        if (!_detectThrottle.shouldProcess()) return;
+
+        _detectThrottle.setProcessing(true);
+        final startTime = DateTime.now().millisecondsSinceEpoch;
+
         _sendFrameToNative(image).whenComplete(() {
-          _isProcessing = false;
+          final cost = DateTime.now().millisecondsSinceEpoch - startTime;
+          _detectThrottle.recordProcessTime(cost);
+          _detectThrottle.setProcessing(false);
         });
       });
     } catch (e) {
@@ -505,6 +519,18 @@ class _GestureScreenState extends State<GestureScreen>
                               child: CustomPaint(
                                 painter: HandLandmarkPainter(
                                   handsLandmarks: _handsLandmarks,
+                                ),
+                              ),
+                            ),
+                            // ── 调试信息：当前自适应检测间隔 ──────────
+                            Positioned(
+                              top: 10,
+                              right: 10,
+                              child: Text(
+                                '检测间隔: ${_detectThrottle.currentInterval}ms',
+                                style: const TextStyle(
+                                  color: Colors.green,
+                                  fontSize: 12,
                                 ),
                               ),
                             ),

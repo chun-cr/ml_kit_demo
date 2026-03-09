@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:camera/camera.dart';
@@ -8,6 +7,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_face_mesh_detection/google_mlkit_face_mesh_detection.dart';
 
 import '../painters/face_painter.dart';
+import '../utils/adaptive_throttle.dart';
 import '../utils/camera_utils.dart';
 
 /// 自包含的面部检测页面：相机 + 检测器 + 描点绘制
@@ -36,17 +36,17 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   // ── 检测结果 ────────────────────────────────────────────────
   List<Face> _faces = [];
   List<FaceMesh> _meshes = [];
-  bool _isDetecting = false;
   Size? _imageSize;
   int _faceCount = 0;
 
-  // ── 独立频率控制 ──────────────────────────────────────────────
-  int _lastDetectTime = 0;
-  static const _detectIntervalMs = 100; // 检测频率 100ms
-  static const _paintIntervalMs = 30; // 绘制频率 30ms
-
-  // ── 描点刷新定时器 ────────────────────────────────────────────
-  Timer? _paintTimer;
+  // ── 自适应帧率控制 ────────────────────────────────────────────
+  final _detectThrottle = AdaptiveThrottle(); // 检测频率（自适应）
+  final _paintThrottle = AdaptiveThrottle(
+    // 描点刷新（固定 30ms）
+    minInterval: 30,
+    maxInterval: 30,
+    adaptive: false,
+  );
 
   // ── Lifecycle ─────────────────────────────────────────────────
 
@@ -55,14 +55,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initAll();
-
-    _paintTimer = Timer.periodic(
-      const Duration(milliseconds: _paintIntervalMs),
-      (_) {
-        if (!mounted || _isDisposed) return;
-        setState(() {});
-      },
-    );
   }
 
   @override
@@ -90,7 +82,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void dispose() {
     _isDisposed = true;
     WidgetsBinding.instance.removeObserver(this);
-    _paintTimer?.cancel();
     _stopStream();
     _cameraController?.dispose();
     _cameraController = null;
@@ -203,18 +194,23 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     } catch (_) {}
   }
 
-  // ── Processing（100ms 节流）────────────────────────────────────
+  // ── Processing（自适应节流）──────────────────────────────────────
   Future<void> _processImage(CameraImage image) async {
-    if (_isDetecting || _isDisposed) return;
+    if (_isDisposed) return;
     if (_faceDetector == null || _camera == null) return;
     if (_cameraController == null || !_cameraController!.value.isInitialized)
       return;
 
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (now - _lastDetectTime < _detectIntervalMs) return;
-    _lastDetectTime = now;
+    // 描点刷新：固定高频（用缓存数据，不重新检测）
+    if (_paintThrottle.shouldProcess()) {
+      if (mounted) setState(() {});
+    }
 
-    _isDetecting = true;
+    // 检测：自适应频率
+    if (!_detectThrottle.shouldProcess()) return;
+
+    _detectThrottle.setProcessing(true);
+    final startTime = DateTime.now().millisecondsSinceEpoch;
 
     try {
       final inputImage = cameraImageToInputImage(
@@ -249,7 +245,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     } catch (e) {
       debugPrint('[FaceDetection] Error: $e');
     } finally {
-      _isDetecting = false;
+      // 记录耗时，自动调整下一帧间隔
+      final cost = DateTime.now().millisecondsSinceEpoch - startTime;
+      _detectThrottle.recordProcessTime(cost);
+      _detectThrottle.setProcessing(false);
     }
   }
 
@@ -418,6 +417,18 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                                   sensorOrientation: _camera!.sensorOrientation,
                                 ),
                               ),
+                            // ── 调试信息：当前自适应检测间隔 ──────────
+                            Positioned(
+                              top: 10,
+                              right: 10,
+                              child: Text(
+                                '检测间隔: ${_detectThrottle.currentInterval}ms',
+                                style: const TextStyle(
+                                  color: Colors.green,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
