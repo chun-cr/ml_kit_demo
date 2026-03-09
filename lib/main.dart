@@ -92,7 +92,7 @@ class _MainNavScreenState extends State<MainNavScreen> {
         color: const Color(0xFF111118),
         border: Border(
           top: BorderSide(
-            color: Colors.white.withValues(alpha: 0.06),
+            color: Colors.white.withOpacity(0.06),
             width: 1,
           ),
         ),

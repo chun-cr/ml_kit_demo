@@ -80,3 +80,4 @@ ios/Runner.xcworkspace/xcshareddata/
 # 系统文件
 .DS_Store
 Thumbs.db
+nul
