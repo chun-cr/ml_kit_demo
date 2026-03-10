@@ -125,7 +125,7 @@ import MediaPipeTasksVision
 
     private func setupGestureRecognizer(registrar: FlutterPluginRegistrar) {
         guard let modelPath = findAsset(named: "gesture_recognizer.task", registrar: registrar) else {
-            NSLog("[GestureRecognizer] ❌ Model file 'gesture_recognizer.task' not found in bundle")
+            NSLog("[GestureRecognizer] FAIL: Model file 'gesture_recognizer.task' not found in bundle")
             return
         }
         NSLog("[GestureRecognizer] Found model at: \(modelPath)")
@@ -143,9 +143,9 @@ import MediaPipeTasksVision
             options.gestureRecognizerLiveStreamDelegate = self
 
             gestureRecognizer = try GestureRecognizer(options: options)
-            NSLog("[GestureRecognizer] ✅ Initialized successfully")
+            NSLog("[GestureRecognizer] OK: Initialized successfully")
         } catch {
-            NSLog("[GestureRecognizer] ❌ Init failed: \(error)")
+            NSLog("[GestureRecognizer] FAIL: Init failed: \(error)")
         }
     }
 
@@ -153,7 +153,7 @@ import MediaPipeTasksVision
 
     private func setupFaceLandmarker(registrar: FlutterPluginRegistrar) {
         guard let modelPath = findAsset(named: "face_landmarker.task", registrar: registrar) else {
-            NSLog("[FaceLandmarker] ❌ Model file 'face_landmarker.task' not found in bundle")
+            NSLog("[FaceLandmarker] FAIL: Model file 'face_landmarker.task' not found in bundle")
             return
         }
         NSLog("[FaceLandmarker] Found model at: \(modelPath)")
@@ -171,9 +171,9 @@ import MediaPipeTasksVision
             options.faceLandmarkerLiveStreamDelegate = self
 
             faceLandmarker = try FaceLandmarker(options: options)
-            NSLog("[FaceLandmarker] ✅ Initialized successfully")
+            NSLog("[FaceLandmarker] OK: Initialized successfully")
         } catch {
-            NSLog("[FaceLandmarker] ❌ Init failed: \(error)")
+            NSLog("[FaceLandmarker] FAIL: Init failed: \(error)")
         }
     }
 
