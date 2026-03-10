@@ -241,14 +241,26 @@ import MediaPipeTasksVision
     private func buildMPImage(bytes: Data, width: Int, height: Int,
                               bytesPerRow: Int, rotation: Int) -> MPImage? {
         guard let cgImage = createCGImage(from: bytes, width: width, height: height,
-                                           bytesPerRow: bytesPerRow) else { return nil }
+                                           bytesPerRow: bytesPerRow) else {
+            NSLog("[Gesture] \u274c createCGImage failed \u2014 bytes:\(bytes.count) \(width)x\(height)")
+            return nil
+        }
         let orientation = imageOrientation(for: rotation)
+        NSLog("[Gesture] orientation: \(orientation.rawValue)")
         let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: orientation)
-        return try? MPImage(uiImage: uiImage)
+        do {
+            let mp = try MPImage(uiImage: uiImage)
+            NSLog("[Gesture] \u2705 MPImage built")
+            return mp
+        } catch {
+            NSLog("[Gesture] \u274c MPImage failed: \(error)")
+            return nil
+        }
     }
 
     private func processGestureFrame(bytes: Data, width: Int, height: Int,
                                      bytesPerRow: Int, rotation: Int) {
+        NSLog("[Gesture] \u25b6 frame arrived \u2014 \(width)x\(height) rot:\(rotation) bytes:\(bytes.count) recognizer:\(gestureRecognizer != nil)")
         guard let recognizer = gestureRecognizer else { return }
         guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height,
                                          bytesPerRow: bytesPerRow, rotation: rotation) else { return }
@@ -323,6 +335,7 @@ extension AppDelegate: GestureRecognizerLiveStreamDelegate {
         timestampInMilliseconds: Int,
         error: Error?
     ) {
+        NSLog("[Gesture] \u25c0 callback \u2014 gestures:\(result?.gestures.count ?? -1) error:\(String(describing: error))")
         if let error = error {
             NSLog("[GestureRecognizer] callback error: \(error)")
             return
@@ -344,7 +357,7 @@ extension AppDelegate: GestureRecognizerLiveStreamDelegate {
         guard let sink = landmarkSink else { return }
         var allHands: [[[String: Double]]] = []
         for handLandmarks in result.landmarks {
-            allHands.append(handLandmarks.map { ["x": Double($0.x), "y": Double($0.y)] })
+            allHands.append(handLandmarks.map { ["x": 1.0 - Double($0.x), "y": Double($0.y)] })
         }
         DispatchQueue.main.async {
             sink(["hands": allHands, "numHands": allHands.count])
@@ -416,7 +429,7 @@ extension AppDelegate: FaceLandmarkerLiveStreamDelegate {
         // result.faceLandmarks: [[NormalizedLandmark]]，每张脸 478 个点（normalized 0~1）
         let faces: [[[String: Double]]] = result.faceLandmarks.map { landmarks in
             landmarks.map { lm in
-                ["x": Double(lm.x), "y": Double(lm.y), "z": Double(lm.z)]
+                ["x": 1.0 - Double(lm.x), "y": Double(lm.y), "z": Double(lm.z)]
             }
         }
         DispatchQueue.main.async {
