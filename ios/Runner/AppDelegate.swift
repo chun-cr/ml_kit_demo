@@ -242,25 +242,25 @@ import MediaPipeTasksVision
                               bytesPerRow: Int, rotation: Int) -> MPImage? {
         guard let cgImage = createCGImage(from: bytes, width: width, height: height,
                                            bytesPerRow: bytesPerRow) else {
-            NSLog("[Gesture] \u274c createCGImage failed \u2014 bytes:\(bytes.count) \(width)x\(height)")
+            NSLog("[Gesture] FAIL createCGImage - bytes:%d %dx%d", bytes.count, width, height)
             return nil
         }
         let orientation = imageOrientation(for: rotation)
-        NSLog("[Gesture] orientation: \(orientation.rawValue)")
+        NSLog("[Gesture] orientation: %d", orientation.rawValue)
         let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: orientation)
         do {
             let mp = try MPImage(uiImage: uiImage)
-            NSLog("[Gesture] \u2705 MPImage built")
+            NSLog("[Gesture] OK MPImage built")
             return mp
         } catch {
-            NSLog("[Gesture] \u274c MPImage failed: \(error)")
+            NSLog("[Gesture] FAIL MPImage: %@", error.localizedDescription)
             return nil
         }
     }
 
     private func processGestureFrame(bytes: Data, width: Int, height: Int,
                                      bytesPerRow: Int, rotation: Int) {
-        NSLog("[Gesture] \u25b6 frame arrived \u2014 \(width)x\(height) rot:\(rotation) bytes:\(bytes.count) recognizer:\(gestureRecognizer != nil)")
+        NSLog("[Gesture] >> frame arrived - %dx%d rot:%d bytes:%d recognizer:%d", width, height, rotation, bytes.count, gestureRecognizer != nil ? 1 : 0)
         guard let recognizer = gestureRecognizer else { return }
         guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height,
                                          bytesPerRow: bytesPerRow, rotation: rotation) else { return }
@@ -335,7 +335,7 @@ extension AppDelegate: GestureRecognizerLiveStreamDelegate {
         timestampInMilliseconds: Int,
         error: Error?
     ) {
-        NSLog("[Gesture] \u25c0 callback \u2014 gestures:\(result?.gestures.count ?? -1) error:\(String(describing: error))")
+        NSLog("[Gesture] << callback - gestures:%d error:%@", result?.gestures.count ?? -1, error?.localizedDescription ?? "nil")
         if let error = error {
             NSLog("[GestureRecognizer] callback error: \(error)")
             return
