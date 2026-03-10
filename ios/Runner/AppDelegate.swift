@@ -351,7 +351,7 @@ import MediaPipeTasksVision
 extension AppDelegate: GestureRecognizerLiveStreamDelegate {
     func gestureRecognizer(
         _ gestureRecognizer: GestureRecognizer,
-        didFinishRecognition result: GestureRecognizerResult?,
+        didFinishGestureRecognition result: GestureRecognizerResult?,
         timestampInMilliseconds: Int,
         error: Error?
     ) {
