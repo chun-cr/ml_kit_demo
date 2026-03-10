@@ -88,7 +88,7 @@ import MediaPipeTasksVision
         // 方式 1：标准 Flutter 资产路径（最可靠）
         let assetKey = registrar.lookupKey(forAsset: "assets/\(fileName)")
         if let path = Bundle.main.path(forResource: assetKey, ofType: nil) {
-            NSLog("[Asset] Found via registrar: \(path)")
+            NSLog("[Asset] Found via registrar: %@", path)
             return path
         }
 
@@ -102,7 +102,7 @@ import MediaPipeTasksVision
             for relative in candidates {
                 let full = (root as NSString).appendingPathComponent(relative)
                 if FileManager.default.fileExists(atPath: full) {
-                    NSLog("[Asset] Found via candidate path: \(full)")
+                    NSLog("[Asset] Found via candidate path: %@", full)
                     return full
                 }
             }
@@ -114,7 +114,7 @@ import MediaPipeTasksVision
         while let entry = enumerator.nextObject() as? String {
             if entry.hasSuffix("/\(fileName)") || entry == fileName {
                 let full = (root as NSString).appendingPathComponent(entry)
-                NSLog("[Asset] Found via recursive search: \(full)")
+                NSLog("[Asset] Found via recursive search: %@", full)
                 return full
             }
         }
@@ -128,7 +128,7 @@ import MediaPipeTasksVision
             NSLog("[GestureRecognizer] FAIL: Model file 'gesture_recognizer.task' not found in bundle")
             return
         }
-        NSLog("[GestureRecognizer] Found model at: \(modelPath)")
+        NSLog("[GestureRecognizer] Found model at: %@", modelPath)
         do {
             let baseOptions = BaseOptions()
             baseOptions.modelAssetPath = modelPath
@@ -145,7 +145,7 @@ import MediaPipeTasksVision
             gestureRecognizer = try GestureRecognizer(options: options)
             NSLog("[GestureRecognizer] OK: Initialized successfully")
         } catch {
-            NSLog("[GestureRecognizer] FAIL: Init failed: \(error)")
+            NSLog("[GestureRecognizer] FAIL: Init failed: %@", error.localizedDescription)
         }
     }
 
@@ -156,7 +156,7 @@ import MediaPipeTasksVision
             NSLog("[FaceLandmarker] FAIL: Model file 'face_landmarker.task' not found in bundle")
             return
         }
-        NSLog("[FaceLandmarker] Found model at: \(modelPath)")
+        NSLog("[FaceLandmarker] Found model at: %@", modelPath)
         do {
             let baseOptions = BaseOptions()
             baseOptions.modelAssetPath = modelPath
@@ -173,7 +173,7 @@ import MediaPipeTasksVision
             faceLandmarker = try FaceLandmarker(options: options)
             NSLog("[FaceLandmarker] OK: Initialized successfully")
         } catch {
-            NSLog("[FaceLandmarker] FAIL: Init failed: \(error)")
+            NSLog("[FaceLandmarker] FAIL: Init failed: %@", error.localizedDescription)
         }
     }
 
@@ -292,7 +292,7 @@ import MediaPipeTasksVision
         do {
             try recognizer.recognizeAsync(image: mpImage, timestampInMilliseconds: timestamp)
         } catch {
-            NSLog("[GestureRecognizer] recognizeAsync error: \(error)")
+            NSLog("[GestureRecognizer] recognizeAsync error: %@", error.localizedDescription)
         }
     }
 
@@ -309,7 +309,7 @@ import MediaPipeTasksVision
         do {
             try landmarker.detectAsync(image: mpImage, timestampInMilliseconds: timestamp)
         } catch {
-            NSLog("[FaceLandmarker] detectAsync error: \(error)")
+            NSLog("[FaceLandmarker] detectAsync error: %@", error.localizedDescription)
         }
     }
 
@@ -357,7 +357,7 @@ extension AppDelegate: GestureRecognizerLiveStreamDelegate {
     ) {
         NSLog("[Gesture] << callback - gestures:%d error:%@", result?.gestures.count ?? -1, error?.localizedDescription ?? "nil")
         if let error = error {
-            NSLog("[GestureRecognizer] callback error: \(error)")
+            NSLog("[GestureRecognizer] callback error: %@", error.localizedDescription)
             return
         }
         guard let result = result else { return }
@@ -432,7 +432,7 @@ extension AppDelegate: FaceLandmarkerLiveStreamDelegate {
         error: Error?
     ) {
         if let error = error {
-            NSLog("[FaceLandmarker] callback error: \(error)")
+            NSLog("[FaceLandmarker] callback error: %@", error.localizedDescription)
             return
         }
         guard let result = result else { return }

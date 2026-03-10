@@ -289,6 +289,7 @@ class _GestureScreenState extends State<GestureScreen>
       });
     } catch (e) {
       print('[Gesture][Dart] sendFrame error: $e');
+    }
   }
 
   /// 根据设备朝向 + 传感器方向计算实际旋转角度（前置摄像头）
