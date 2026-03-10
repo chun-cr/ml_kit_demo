@@ -109,6 +109,8 @@ const List<int> _innerLipContour = [
 class FacePainter extends CustomPainter {
   final List<Face> faces;
   final List<FaceMesh> meshes;
+  // iOS MediaPipe FaceLandmarker 结果：每张脸的归一化坐标点列表 (0~1)
+  final List<List<Offset>> iosFaceLandmarks;
   final Size imageSize;
   final CameraLensDirection cameraLensDirection;
   final int sensorOrientation;
@@ -116,6 +118,7 @@ class FacePainter extends CustomPainter {
   FacePainter({
     required this.faces,
     required this.meshes,
+    required this.iosFaceLandmarks,
     required this.imageSize,
     required this.cameraLensDirection,
     required this.sensorOrientation,
@@ -144,9 +147,12 @@ class FacePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     _drawFaceBoundingBoxes(canvas, size);
+    // Android: ML Kit FaceMesh 三角网格 + 点
     _drawFaceMeshTriangles(canvas, size);
     _drawFaceMeshPoints(canvas, size);
     _drawLips(canvas, size);
+    // iOS: MediaPipe FaceLandmarker 归一化点
+    _drawIosFaceLandmarks(canvas, size);
   }
 
   // ---------------------------------------------------------------------------
@@ -398,6 +404,59 @@ class FacePainter extends CustomPainter {
     if (started) {
       canvas.drawPath(path, paint);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // iOS: MediaPipe FaceLandmarker 归一化点绘制
+  // 坐标已经是 0~1 归一化，前置摄像头需要镜像 x
+  // ---------------------------------------------------------------------------
+
+  void _drawIosFaceLandmarks(Canvas canvas, Size size) {
+    if (iosFaceLandmarks.isEmpty) return;
+
+    final dotPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xCC00CCFF);
+
+    for (final landmarks in iosFaceLandmarks) {
+      if (landmarks.isEmpty) continue;
+      for (final lm in landmarks) {
+        final x = (1.0 - lm.dx) * size.width;
+        final y = lm.dy * size.height;
+        canvas.drawCircle(Offset(x, y), 1.2, dotPaint);
+      }
+      _drawIosLipContour(canvas, size, landmarks);
+    }
+  }
+
+  void _drawIosLipContour(Canvas canvas, Size size, List<Offset> lm) {
+    if (lm.length < 409) return;
+
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..color = const Color(0xCC00CCFF)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    Offset toScreen(int idx) {
+      final pt = lm[idx];
+      return Offset((1.0 - pt.dx) * size.width, pt.dy * size.height);
+    }
+
+    void drawContour(List<int> indices) {
+      if (indices.length < 2) return;
+      final path = Path();
+      path.moveTo(toScreen(indices[0]).dx, toScreen(indices[0]).dy);
+      for (int i = 1; i < indices.length; i++) {
+        final p = toScreen(indices[i]);
+        path.lineTo(p.dx, p.dy);
+      }
+      canvas.drawPath(path, paint);
+    }
+
+    drawContour(_outerLipContour);
+    drawContour(_innerLipContour);
   }
 
   @override

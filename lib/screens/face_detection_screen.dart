@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_face_mesh_detection/google_mlkit_face_mesh_detection.dart';
@@ -11,6 +13,9 @@ import '../utils/adaptive_throttle.dart';
 import '../utils/camera_utils.dart';
 
 /// 自包含的面部检测页面：相机 + 检测器 + 描点绘制
+///
+/// Android：使用 google_mlkit_face_detection + google_mlkit_face_mesh_detection
+/// iOS：使用 google_mlkit_face_detection + MediaPipe FaceLandmarker (via platform channel)
 class FaceDetectionScreen extends StatefulWidget {
   const FaceDetectionScreen({super.key});
 
@@ -26,27 +31,38 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   bool _isDisposed = false;
   String? _errorMessage;
 
-  // ── 检测器 ──────────────────────────────────────────────────
+  // ── 检测器（Android only） ──────────────────────────────────
   FaceDetector? _faceDetector;
   FaceMeshDetector? _faceMeshDetector;
+
+  // ── iOS: MediaPipe FaceLandmarker via platform channel ─────
+  static const _iosFaceFrameChannel = MethodChannel('face/frame');
+  static const _iosFaceMeshChannel  = EventChannel('face/mesh/stream');
+  StreamSubscription? _iosFaceMeshSubscription;
+
+  // iOS FaceLandmarker 结果：每张脸 478 个归一化坐标点
+  // 格式：List<List<Offset>>，与 _meshes 用途相同但来源不同
+  List<List<Offset>> _iosFaceLandmarks = [];
 
   // ── 整体初始化状态 ──────────────────────────────────────────
   bool _isInitialized = false;
 
   // ── 检测结果 ────────────────────────────────────────────────
   List<Face> _faces = [];
-  List<FaceMesh> _meshes = [];
+  List<FaceMesh> _meshes = [];   // Android only
   Size? _imageSize;
   int _faceCount = 0;
 
   // ── 自适应帧率控制 ────────────────────────────────────────────
-  final _detectThrottle = AdaptiveThrottle(); // 检测频率（自适应）
+  final _detectThrottle = AdaptiveThrottle();
   final _paintThrottle = AdaptiveThrottle(
-    // 描点刷新（固定 30ms）
     minInterval: 30,
     maxInterval: 30,
     adaptive: false,
   );
+
+  // ── iOS 帧发送节流（与手势识别共享同一套逻辑）──────────────
+  final _iosFaceThrottle = AdaptiveThrottle();
 
   // ── Lifecycle ─────────────────────────────────────────────────
 
@@ -54,23 +70,22 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isIOS) {
+      _listenIosFaceMeshStream();
+    }
     _initAll();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_isDisposed) return;
-
     switch (state) {
       case AppLifecycleState.inactive:
-        // 上滑查看后台时触发，不释放相机，画面自然定格在最后一帧
         break;
       case AppLifecycleState.paused:
-        // 真正进入后台才释放相机资源
         _releaseCamera();
         break;
       case AppLifecycleState.resumed:
-        // 回到前台重新初始化
         _initAll();
         break;
       default:
@@ -82,6 +97,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void dispose() {
     _isDisposed = true;
     WidgetsBinding.instance.removeObserver(this);
+    _iosFaceMeshSubscription?.cancel();
     _stopStream();
     _cameraController?.dispose();
     _cameraController = null;
@@ -96,25 +112,24 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     _cameraController?.dispose();
     _cameraController = null;
     _camera = null;
-    if (mounted) {
-      setState(() => _isInitialized = false);
-    }
+    if (mounted) setState(() => _isInitialized = false);
   }
 
-  // ── 统一初始化（相机 + 检测器并行）────────────────────────────
+  // ── 统一初始化 ────────────────────────────────────────────────
   Future<void> _initAll() async {
     if (_isDisposed) return;
     if (mounted) setState(() => _isInitialized = false);
 
     try {
-      await Future.wait([_initCamera(), _initDetectors()]);
+      final futures = <Future>[_initCamera()];
+      if (!Platform.isIOS) futures.add(_initDetectors());
+      await Future.wait(futures);
 
       if (_isDisposed) return;
 
-      // 相机和检测器都准备好后开始帧流
       if (_cameraController != null &&
           _cameraController!.value.isInitialized &&
-          _faceDetector != null) {
+          (Platform.isIOS || _faceDetector != null)) {
         _startStream();
         if (mounted) setState(() => _isInitialized = true);
       }
@@ -126,19 +141,16 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   // ── 初始化相机 ──────────────────────────────────────────────
   Future<void> _initCamera() async {
     if (_isDisposed) return;
-
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
         if (mounted) setState(() => _errorMessage = '未发现可用摄像头');
         return;
       }
-
       _camera = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
-
       _cameraController = CameraController(
         _camera!,
         ResolutionPreset.medium,
@@ -147,7 +159,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             ? ImageFormatGroup.bgra8888
             : ImageFormatGroup.nv21,
       );
-
       await _cameraController!.initialize();
     } catch (e) {
       debugPrint('[FaceDetection] Camera init error: $e');
@@ -155,9 +166,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     }
   }
 
-  // ── 初始化检测器（异步，与相机并行）────────────────────────
+  // ── 初始化检测器（Android only） ────────────────────────────
   Future<void> _initDetectors() async {
-    // 检测器初始化本身很快，但放在 Future 里便于 Future.wait 并行
     _faceDetector = FaceDetector(
       options: FaceDetectorOptions(
         enableClassification: true,
@@ -167,9 +177,42 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         performanceMode: FaceDetectorMode.fast,
       ),
     );
-
     _faceMeshDetector = FaceMeshDetector(
       option: FaceMeshDetectorOptions.faceMesh,
+    );
+  }
+
+  // ── iOS: 监听 FaceLandmarker 结果 ──────────────────────────
+  void _listenIosFaceMeshStream() {
+    _iosFaceMeshSubscription =
+        _iosFaceMeshChannel.receiveBroadcastStream().listen(
+      (event) {
+        if (_isDisposed || !mounted) return;
+        if (event is! Map) return;
+        final facesRaw = event['faces'];
+        if (facesRaw is! List) {
+          setState(() => _iosFaceLandmarks = []);
+          return;
+        }
+        final parsed = <List<Offset>>[];
+        for (final face in facesRaw) {
+          if (face is! List) continue;
+          final pts = <Offset>[];
+          for (final pt in face) {
+            if (pt is Map) {
+              final x = (pt['x'] as num?)?.toDouble() ?? 0.0;
+              final y = (pt['y'] as num?)?.toDouble() ?? 0.0;
+              pts.add(Offset(x, y));
+            }
+          }
+          if (pts.isNotEmpty) parsed.add(pts);
+        }
+        setState(() {
+          _iosFaceLandmarks = parsed;
+          _faceCount = parsed.length;
+        });
+      },
+      onError: (e) => debugPrint('[FaceMeshChannel] error: $e'),
     );
   }
 
@@ -178,9 +221,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized) return;
     if (controller.value.isStreamingImages) return;
-
     try {
-      controller.startImageStream(_processImage);
+      if (Platform.isIOS) {
+        controller.startImageStream(_processImageIos);
+      } else {
+        controller.startImageStream(_processImageAndroid);
+      }
     } catch (e) {
       debugPrint('[FaceDetection] Failed to start stream: $e');
     }
@@ -194,24 +240,53 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     } catch (_) {}
   }
 
-  // ── Processing（自适应节流）──────────────────────────────────────
-  Future<void> _processImage(CameraImage image) async {
+  // ── iOS 帧处理：发送到原生 FaceLandmarker + ML Kit 人脸检测 ──
+  Future<void> _processImageIos(CameraImage image) async {
     if (_isDisposed) return;
-    if (_faceDetector == null || _camera == null) return;
-    if (_cameraController == null || !_cameraController!.value.isInitialized)
-      return;
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
 
-    // 描点刷新：固定高频（用缓存数据，不重新检测）
+    // 描点刷新
     if (_paintThrottle.shouldProcess()) {
       if (mounted) setState(() {});
     }
 
-    // 检测：自适应频率
-    if (!_detectThrottle.shouldProcess()) return;
-
-    _detectThrottle.setProcessing(true);
+    if (!_iosFaceThrottle.shouldProcess()) return;
+    _iosFaceThrottle.setProcessing(true);
     final startTime = DateTime.now().millisecondsSinceEpoch;
 
+    try {
+      final bytes = _concatenatePlanes(image.planes);
+      final rotation = _cameraController?.description.sensorOrientation ?? 0;
+
+      // 同时发送给 ML Kit（人脸检测框 + 表情）和 FaceLandmarker（特征点）
+      await Future.wait([
+        _sendToMlKitIos(image),
+        _iosFaceFrameChannel.invokeMethod('processFrame', {
+          'bytes': bytes,
+          'width': image.width,
+          'height': image.height,
+          'rotation': rotation,
+        }),
+      ]);
+    } catch (e) {
+      debugPrint('[FaceDetection iOS] error: $e');
+    } finally {
+      final cost = DateTime.now().millisecondsSinceEpoch - startTime;
+      _iosFaceThrottle.recordProcessTime(cost);
+      _iosFaceThrottle.setProcessing(false);
+    }
+  }
+
+  Future<void> _sendToMlKitIos(CameraImage image) async {
+    _faceDetector ??= FaceDetector(
+      options: FaceDetectorOptions(
+        enableClassification: true,
+        enableContours: false,
+        enableLandmarks: false,
+        enableTracking: true,
+        performanceMode: FaceDetectorMode.fast,
+      ),
+    );
     try {
       final inputImage = cameraImageToInputImage(
         image,
@@ -221,12 +296,48 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       if (inputImage == null) return;
 
       final rawSize = inputImage.metadata!.size;
-      final sensorOrientation = _camera!.sensorOrientation;
-      if (sensorOrientation == 90 || sensorOrientation == 270) {
-        _imageSize = Size(rawSize.height, rawSize.width);
-      } else {
-        _imageSize = rawSize;
+      final so = _camera!.sensorOrientation;
+      _imageSize = (so == 90 || so == 270)
+          ? Size(rawSize.height, rawSize.width)
+          : rawSize;
+
+      final faces = await _faceDetector!.processImage(inputImage);
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _faces = faces;
+          // faceCount 由 FaceLandmarker 结果决定，这里只更新检测框
+        });
       }
+    } catch (e) {
+      debugPrint('[FaceDetection iOS MLKit] error: $e');
+    }
+  }
+
+  // ── Android 帧处理（原逻辑不变）────────────────────────────
+  Future<void> _processImageAndroid(CameraImage image) async {
+    if (_isDisposed) return;
+    if (_faceDetector == null || _camera == null) return;
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+
+    if (_paintThrottle.shouldProcess()) {
+      if (mounted) setState(() {});
+    }
+    if (!_detectThrottle.shouldProcess()) return;
+
+    _detectThrottle.setProcessing(true);
+    final startTime = DateTime.now().millisecondsSinceEpoch;
+
+    try {
+      final inputImage = cameraImageToInputImage(
+        image, _camera!, _cameraController!.value.deviceOrientation,
+      );
+      if (inputImage == null) return;
+
+      final rawSize = inputImage.metadata!.size;
+      final so = _camera!.sensorOrientation;
+      _imageSize = (so == 90 || so == 270)
+          ? Size(rawSize.height, rawSize.width)
+          : rawSize;
 
       final faces = await _faceDetector!.processImage(inputImage);
 
@@ -238,27 +349,38 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       } catch (_) {}
 
       if (mounted && !_isDisposed) {
-        _faces = faces;
-        _meshes = meshes;
-        _faceCount = faces.length;
+        setState(() {
+          _faces = faces;
+          _meshes = meshes;
+          _faceCount = faces.length;
+        });
       }
     } catch (e) {
-      debugPrint('[FaceDetection] Error: $e');
+      debugPrint('[FaceDetection Android] Error: $e');
     } finally {
-      // 记录耗时，自动调整下一帧间隔
       final cost = DateTime.now().millisecondsSinceEpoch - startTime;
       _detectThrottle.recordProcessTime(cost);
       _detectThrottle.setProcessing(false);
     }
   }
 
+  Uint8List _concatenatePlanes(List<Plane> planes) {
+    int total = 0;
+    for (final p in planes) { total += p.bytes.length; }
+    final result = Uint8List(total);
+    int offset = 0;
+    for (final p in planes) {
+      result.setRange(offset, offset + p.bytes.length, p.bytes);
+      offset += p.bytes.length;
+    }
+    return result;
+  }
+
   // ── Build ─────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    if (_errorMessage != null) {
-      return _buildErrorView();
-    }
+    if (_errorMessage != null) return _buildErrorView();
     if (!_isInitialized ||
         _cameraController == null ||
         !_cameraController!.value.isInitialized) {
@@ -276,11 +398,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.error_outline,
-                color: Colors.redAccent,
-                size: 64,
-              ),
+              const Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
               const SizedBox(height: 16),
               Text(
                 _errorMessage!,
@@ -324,11 +442,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             const SizedBox(height: 24),
             const Text(
               '正在初始化摄像头…',
-              style: TextStyle(
-                color: Colors.white54,
-                fontSize: 14,
-                letterSpacing: 0.5,
-              ),
+              style: TextStyle(color: Colors.white54, fontSize: 14, letterSpacing: 0.5),
             ),
           ],
         ),
@@ -337,6 +451,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildMainView() {
+    // iOS 用 FaceLandmarker 点数，Android 用 ML Kit 结果
+    final displayCount = Platform.isIOS ? _iosFaceLandmarks.length : _faceCount;
+    final hasMesh = Platform.isIOS
+        ? _iosFaceLandmarks.isNotEmpty
+        : _meshes.isNotEmpty;
+    final meshLabel = Platform.isIOS ? '478 特征点' : '468 特征点';
+
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0F),
       body: SafeArea(
@@ -348,10 +469,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
               child: Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
                         colors: [Color(0xFF00C9FF), Color(0xFF92FE9D)],
@@ -361,11 +479,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.face_retouching_natural_rounded,
-                          color: Colors.white,
-                          size: 16,
-                        ),
+                        Icon(Icons.face_retouching_natural_rounded,
+                            color: Colors.white, size: 16),
                         SizedBox(width: 6),
                         Text(
                           '面部检测',
@@ -407,26 +522,38 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                           fit: StackFit.expand,
                           children: [
                             CameraPreview(_cameraController!),
-                            if (_imageSize != null)
+                            // 绘制层：iOS 用 FaceLandmarker 点，Android 用 ML Kit
+                            if (Platform.isIOS)
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  painter: FacePainter(
+                                    faces: _faces,
+                                    meshes: const [],
+                                    iosFaceLandmarks: _iosFaceLandmarks,
+                                    imageSize: _imageSize ?? const Size(1, 1),
+                                    cameraLensDirection: _camera!.lensDirection,
+                                    sensorOrientation: _camera!.sensorOrientation,
+                                  ),
+                                ),
+                              )
+                            else if (_imageSize != null)
                               CustomPaint(
                                 painter: FacePainter(
                                   faces: _faces,
                                   meshes: _meshes,
+                                  iosFaceLandmarks: const [],
                                   imageSize: _imageSize!,
                                   cameraLensDirection: _camera!.lensDirection,
                                   sensorOrientation: _camera!.sensorOrientation,
                                 ),
                               ),
-                            // ── 调试信息：当前自适应检测间隔 ──────────
+                            // 调试信息
                             Positioned(
                               top: 10,
                               right: 10,
                               child: Text(
-                                '检测间隔: ${_detectThrottle.currentInterval}ms',
-                                style: const TextStyle(
-                                  color: Colors.green,
-                                  fontSize: 12,
-                                ),
+                                '检测间隔: ${Platform.isIOS ? _iosFaceThrottle.currentInterval : _detectThrottle.currentInterval}ms',
+                                style: const TextStyle(color: Colors.green, fontSize: 12),
                               ),
                             ),
                           ],
@@ -445,10 +572,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 14,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(20),
                   gradient: LinearGradient(
@@ -465,8 +589,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                   ),
                 ),
                 child: Text(
-                  _faceCount > 0
-                      ? '检测到 $_faceCount 张人脸  ·  ${_meshes.isNotEmpty ? "468 特征点" : "特征点加载中…"}'
+                  displayCount > 0
+                      ? '检测到 $displayCount 张人脸  ·  ${hasMesh ? meshLabel : "特征点加载中…"}'
                       : '未检测到人脸',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
@@ -486,7 +610,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildStatusDot() {
-    final isActive = _faceCount > 0;
+    final isActive = Platform.isIOS ? _iosFaceLandmarks.isNotEmpty : _faceCount > 0;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
