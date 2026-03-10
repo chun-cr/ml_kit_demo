@@ -52,8 +52,11 @@ import MediaPipeTasksVision
             return super.application(application, didFinishLaunchingWithOptions: launchOptions)
         }
 
-        setupGestureRecognizer()
-        setupFaceLandmarker()
+        // registrar 提供标准 Flutter 资产路径查找
+        let registrar = self.registrar(forPlugin: "AppDelegatePlugin")!
+
+        setupGestureRecognizer(registrar: registrar)
+        setupFaceLandmarker(registrar: registrar)
 
         setupGestureMethodChannel(controller: controller)
         setupGestureEventChannels(controller: controller)
@@ -66,32 +69,39 @@ import MediaPipeTasksVision
 
     // MARK: - Asset Path Helper
 
-    /// 在 Flutter bundle 内递归查找指定文件名（含后缀），返回绝对路径
-    private func findAsset(named fileName: String) -> String? {
-        // 优先从 flutter_assets 目录直接查找（Release 和 Debug 真机常见路径）
+    /// 优先用 Flutter 标准 registrar.lookupKey 获取资产路径，失败后先登录候选路径再递归搜索
+    private func findAsset(named fileName: String, registrar: FlutterPluginRegistrar) -> String? {
+        // 方式 1：标准 Flutter 资产路径（最可靠）
+        let assetKey = registrar.lookupKey(forAsset: "assets/\(fileName)")
+        if let path = Bundle.main.path(forResource: assetKey, ofType: nil) {
+            NSLog("[Asset] Found via registrar: \(path)")
+            return path
+        }
+
+        // 方式 2：候选路径列表
         let candidates: [String] = [
             "Frameworks/App.framework/flutter_assets/assets/\(fileName)",
             "flutter_assets/assets/\(fileName)",
             "assets/\(fileName)",
         ]
-        for relative in candidates {
-            if let path = Bundle.main.path(forResource: nil, ofType: nil),
-               FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent(relative)) {
-                return (path as NSString).appendingPathComponent(relative)
-            }
-            // Bundle.main.resourcePath 方式
-            if let root = Bundle.main.resourcePath {
+        if let root = Bundle.main.resourcePath {
+            for relative in candidates {
                 let full = (root as NSString).appendingPathComponent(relative)
-                if FileManager.default.fileExists(atPath: full) { return full }
+                if FileManager.default.fileExists(atPath: full) {
+                    NSLog("[Asset] Found via candidate path: \(full)")
+                    return full
+                }
             }
         }
 
-        // 兜底：递归搜索整个 bundle
+        // 方式 3：兑底递归搜索
         guard let root = Bundle.main.resourcePath,
               let enumerator = FileManager.default.enumerator(atPath: root) else { return nil }
         while let entry = enumerator.nextObject() as? String {
             if entry.hasSuffix("/\(fileName)") || entry == fileName {
-                return (root as NSString).appendingPathComponent(entry)
+                let full = (root as NSString).appendingPathComponent(entry)
+                NSLog("[Asset] Found via recursive search: \(full)")
+                return full
             }
         }
         return nil
@@ -99,8 +109,8 @@ import MediaPipeTasksVision
 
     // MARK: - Gesture Recognizer Init
 
-    private func setupGestureRecognizer() {
-        guard let modelPath = findAsset(named: "gesture_recognizer.task") else {
+    private func setupGestureRecognizer(registrar: FlutterPluginRegistrar) {
+        guard let modelPath = findAsset(named: "gesture_recognizer.task", registrar: registrar) else {
             NSLog("[GestureRecognizer] ❌ Model file 'gesture_recognizer.task' not found in bundle")
             return
         }
@@ -127,8 +137,8 @@ import MediaPipeTasksVision
 
     // MARK: - Face Landmarker Init
 
-    private func setupFaceLandmarker() {
-        guard let modelPath = findAsset(named: "face_landmarker.task") else {
+    private func setupFaceLandmarker(registrar: FlutterPluginRegistrar) {
+        guard let modelPath = findAsset(named: "face_landmarker.task", registrar: registrar) else {
             NSLog("[FaceLandmarker] ❌ Model file 'face_landmarker.task' not found in bundle")
             return
         }
@@ -173,7 +183,10 @@ import MediaPipeTasksVision
                     result(FlutterError(code: "INVALID_ARGS", message: "Missing frame data", details: nil))
                     return
                 }
-                self.processGestureFrame(bytes: bytes.data, width: width, height: height, rotation: rotation)
+                // bytesPerRow: iOS BGRA8888 必须传入，缺省则用 width*4（安全兑底）
+                let bytesPerRow = (args["bytesPerRow"] as? Int) ?? (width * 4)
+                self.processGestureFrame(bytes: bytes.data, width: width, height: height,
+                                         bytesPerRow: bytesPerRow, rotation: rotation)
                 result(true)
             default:
                 result(FlutterMethodNotImplemented)
@@ -208,7 +221,9 @@ import MediaPipeTasksVision
                     result(FlutterError(code: "INVALID_ARGS", message: "Missing frame data", details: nil))
                     return
                 }
-                self.processFaceFrame(bytes: bytes.data, width: width, height: height, rotation: rotation)
+                let bytesPerRow = (args["bytesPerRow"] as? Int) ?? (width * 4)
+                self.processFaceFrame(bytes: bytes.data, width: width, height: height,
+                                      bytesPerRow: bytesPerRow, rotation: rotation)
                 result(true)
             default:
                 result(FlutterMethodNotImplemented)
@@ -223,16 +238,20 @@ import MediaPipeTasksVision
 
     // MARK: - Frame Processing
 
-    private func buildMPImage(bytes: Data, width: Int, height: Int, rotation: Int) -> MPImage? {
-        guard let cgImage = createCGImage(from: bytes, width: width, height: height) else { return nil }
+    private func buildMPImage(bytes: Data, width: Int, height: Int,
+                              bytesPerRow: Int, rotation: Int) -> MPImage? {
+        guard let cgImage = createCGImage(from: bytes, width: width, height: height,
+                                           bytesPerRow: bytesPerRow) else { return nil }
         let orientation = imageOrientation(for: rotation)
         let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: orientation)
         return try? MPImage(uiImage: uiImage)
     }
 
-    private func processGestureFrame(bytes: Data, width: Int, height: Int, rotation: Int) {
+    private func processGestureFrame(bytes: Data, width: Int, height: Int,
+                                     bytesPerRow: Int, rotation: Int) {
         guard let recognizer = gestureRecognizer else { return }
-        guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height, rotation: rotation) else { return }
+        guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height,
+                                         bytesPerRow: bytesPerRow, rotation: rotation) else { return }
 
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
         guard timestamp > gestureFrameTimestamp else { return }
@@ -245,9 +264,11 @@ import MediaPipeTasksVision
         }
     }
 
-    private func processFaceFrame(bytes: Data, width: Int, height: Int, rotation: Int) {
+    private func processFaceFrame(bytes: Data, width: Int, height: Int,
+                                  bytesPerRow: Int, rotation: Int) {
         guard let landmarker = faceLandmarker else { return }
-        guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height, rotation: rotation) else { return }
+        guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height,
+                                         bytesPerRow: bytesPerRow, rotation: rotation) else { return }
 
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
         guard timestamp > faceFrameTimestamp else { return }
@@ -262,33 +283,21 @@ import MediaPipeTasksVision
 
     // MARK: - Image Helpers
 
-    private func createCGImage(from data: Data, width: Int, height: Int) -> CGImage? {
+    /// 使用真实 bytesPerRow 构建 CGImage，避免 stride padding 造成图像错乱
+    private func createCGImage(from data: Data, width: Int, height: Int, bytesPerRow: Int) -> CGImage? {
         guard width > 0, height > 0, !data.isEmpty else { return nil }
-        let bytesPerPixel = data.count / (width * height)
 
+        // BGRA8888: bytesPerRow 可能 > width*4（stride padding）
+        // 直接使用传入的 bytesPerRow 而非自行计算
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo: CGBitmapInfo
-
-        if bytesPerPixel == 4 {
-            // BGRA8888
-            bitmapInfo = CGBitmapInfo(rawValue:
-                CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
-        } else if bytesPerPixel == 3 {
-            bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue)
-        } else {
-            // Fallback: try JPEG/PNG decode
-            if let provider = CGDataProvider(data: data as CFData) {
-                return CGImage(jpegDataProviderSource: provider, decode: nil,
-                               shouldInterpolate: true, intent: .defaultIntent)
-            }
-            return nil
-        }
+        let bitmapInfo = CGBitmapInfo(rawValue:
+            CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
 
         guard let provider = CGDataProvider(data: data as CFData) else { return nil }
         return CGImage(
             width: width, height: height,
-            bitsPerComponent: 8, bitsPerPixel: bytesPerPixel * 8,
-            bytesPerRow: bytesPerPixel * width,
+            bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
             space: colorSpace, bitmapInfo: bitmapInfo,
             provider: provider, decode: nil,
             shouldInterpolate: false, intent: .defaultIntent

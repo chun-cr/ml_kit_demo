@@ -255,8 +255,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     final startTime = DateTime.now().millisecondsSinceEpoch;
 
     try {
-      final bytes = _concatenatePlanes(image.planes);
-      final rotation = _cameraController?.description.sensorOrientation ?? 0;
+      // iOS BGRA8888: 单平面，必须传 bytesPerRow （包含 stride padding）
+      final plane = image.planes.first;
+      final bytes = plane.bytes;
+      final bytesPerRow = plane.bytesPerRow;
+      // sensorOrientation 在 iOS 上是正确的旋转补偿值（与 camera_utils.dart 一致）
+      final rotation = _cameraController!.description.sensorOrientation;
 
       // 同时发送给 ML Kit（人脸检测框 + 表情）和 FaceLandmarker（特征点）
       await Future.wait([
@@ -265,6 +269,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           'bytes': bytes,
           'width': image.width,
           'height': image.height,
+          'bytesPerRow': bytesPerRow,
           'rotation': rotation,
         }),
       ]);
@@ -362,18 +367,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       _detectThrottle.recordProcessTime(cost);
       _detectThrottle.setProcessing(false);
     }
-  }
-
-  Uint8List _concatenatePlanes(List<Plane> planes) {
-    int total = 0;
-    for (final p in planes) { total += p.bytes.length; }
-    final result = Uint8List(total);
-    int offset = 0;
-    for (final p in planes) {
-      result.setRange(offset, offset + p.bytes.length, p.bytes);
-      offset += p.bytes.length;
-    }
-    return result;
   }
 
   // ── Build ─────────────────────────────────────────────────────

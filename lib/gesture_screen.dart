@@ -266,15 +266,22 @@ class _GestureScreenState extends State<GestureScreen>
     if (_controller == null || !_controller!.value.isInitialized) return;
 
     try {
-      final bytes = _concatenatePlanes(image.planes);
+      // iOS: BGRA8888 单平面，必须用 bytesPerRow 而非 width*4（有 stride padding）
+      // Android: NV21 单平面，bytesPerRow == width
+      final plane = image.planes.first;
+      final bytes = plane.bytes;
+      final bytesPerRow = plane.bytesPerRow;
       final width = image.width;
       final height = image.height;
-      final rotation = _controller?.description.sensorOrientation ?? 0;
+
+      // rotation: 用实际设备朝向计算，而非固定的 sensorOrientation
+      final rotation = _calcRotation();
 
       await _methodChannel.invokeMethod('processFrame', {
         'bytes': bytes,
         'width': width,
         'height': height,
+        'bytesPerRow': bytesPerRow,
         'rotation': rotation,
       });
     } catch (e) {
@@ -282,19 +289,24 @@ class _GestureScreenState extends State<GestureScreen>
     }
   }
 
-  /// 拼接 CameraImage 所有平面的字节
-  Uint8List _concatenatePlanes(List<Plane> planes) {
-    int totalLength = 0;
-    for (final plane in planes) {
-      totalLength += plane.bytes.length;
+  /// 根据设备朝向 + 传感器方向计算实际旋转角度（前置摄像头）
+  int _calcRotation() {
+    if (_controller == null) return 0;
+    final sensorOrientation = _controller!.description.sensorOrientation;
+    if (Platform.isIOS) {
+      // iOS: 直接用 sensorOrientation（MLKit 约定，与 camera_utils.dart 一致）
+      return sensorOrientation;
     }
-    final result = Uint8List(totalLength);
-    int offset = 0;
-    for (final plane in planes) {
-      result.setRange(offset, offset + plane.bytes.length, plane.bytes);
-      offset += plane.bytes.length;
-    }
-    return result;
+    // Android: 需要结合设备朝向补偿
+    const orientationMap = {
+      DeviceOrientation.portraitUp: 0,
+      DeviceOrientation.landscapeLeft: 90,
+      DeviceOrientation.portraitDown: 180,
+      DeviceOrientation.landscapeRight: 270,
+    };
+    final deviceRot = orientationMap[_controller!.value.deviceOrientation] ?? 0;
+    // 前置摄像头
+    return (sensorOrientation + deviceRot) % 360;
   }
 
   // ── 监听手势识别结果 ────────────────────────────────────────
