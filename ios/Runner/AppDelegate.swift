@@ -27,6 +27,14 @@ import MediaPipeTasksVision
     private var landmarkSink: FlutterEventSink?
     private var faceMeshSink: FlutterEventSink?
 
+    // MARK: - Retained Channels (prevent ARC dealloc)
+
+    private var gestureMethodChannel: FlutterMethodChannel?
+    private var faceMethodChannel:    FlutterMethodChannel?
+    private var gestureEventChannel:  FlutterEventChannel?
+    private var landmarkEventChannel: FlutterEventChannel?
+    private var faceMeshEventChannel: FlutterEventChannel?
+
     // MARK: - Throttle
 
     private var lastGestureTime:  TimeInterval = 0
@@ -46,14 +54,19 @@ import MediaPipeTasksVision
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        NSLog("[AppDelegate] >> didFinishLaunchingWithOptions")
         GeneratedPluginRegistrant.register(with: self)
 
         guard let controller = window?.rootViewController as? FlutterViewController else {
+            NSLog("[AppDelegate] FAIL: rootViewController is not FlutterViewController")
             return super.application(application, didFinishLaunchingWithOptions: launchOptions)
         }
 
-        // registrar 提供标准 Flutter 资产路径查找
-        let registrar = self.registrar(forPlugin: "AppDelegatePlugin")!
+        guard let registrar = self.registrar(forPlugin: "AppDelegatePlugin") else {
+            NSLog("[AppDelegate] FAIL: registrar for AppDelegatePlugin is nil")
+            return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+        }
+        NSLog("[AppDelegate] registrar OK, setting up channels")
 
         setupGestureRecognizer(registrar: registrar)
         setupFaceLandmarker(registrar: registrar)
@@ -64,6 +77,7 @@ import MediaPipeTasksVision
         setupFaceMethodChannel(controller: controller)
         setupFaceMeshChannel(controller: controller)
 
+        NSLog("[AppDelegate] << all channels set up")
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
@@ -170,8 +184,11 @@ import MediaPipeTasksVision
             name: methodChannelName,
             binaryMessenger: controller.binaryMessenger
         )
+        gestureMethodChannel = channel   // retain to prevent ARC dealloc
+        NSLog("[AppDelegate] setupGestureMethodChannel: registering handler")
         channel.setMethodCallHandler { [weak self] call, result in
             guard let self = self else { return }
+            NSLog("[Gesture] MethodChannel invoked: %@", call.method)
             switch call.method {
             case "processFrame":
                 guard let args = call.arguments as? [String: Any],
@@ -183,7 +200,6 @@ import MediaPipeTasksVision
                     result(FlutterError(code: "INVALID_ARGS", message: "Missing frame data", details: nil))
                     return
                 }
-                // bytesPerRow: iOS BGRA8888 必须传入，缺省则用 width*4（安全兑底）
                 let bytesPerRow = (args["bytesPerRow"] as? Int) ?? (width * 4)
                 self.processGestureFrame(bytes: bytes.data, width: width, height: height,
                                          bytesPerRow: bytesPerRow, rotation: rotation)
@@ -195,10 +211,12 @@ import MediaPipeTasksVision
     }
 
     private func setupGestureEventChannels(controller: FlutterViewController) {
-        FlutterEventChannel(name: gestureChannelName, binaryMessenger: controller.binaryMessenger)
-            .setStreamHandler(SinkHandler { [weak self] sink in self?.gestureSink = sink })
-        FlutterEventChannel(name: landmarkChannelName, binaryMessenger: controller.binaryMessenger)
-            .setStreamHandler(SinkHandler { [weak self] sink in self?.landmarkSink = sink })
+        let gChannel = FlutterEventChannel(name: gestureChannelName, binaryMessenger: controller.binaryMessenger)
+        gestureEventChannel = gChannel   // retain
+        gChannel.setStreamHandler(SinkHandler { [weak self] sink in self?.gestureSink = sink })
+        let lChannel = FlutterEventChannel(name: landmarkChannelName, binaryMessenger: controller.binaryMessenger)
+        landmarkEventChannel = lChannel   // retain
+        lChannel.setStreamHandler(SinkHandler { [weak self] sink in self?.landmarkSink = sink })
     }
 
     // MARK: - Face Channels
@@ -208,6 +226,7 @@ import MediaPipeTasksVision
             name: faceFrameChannelName,
             binaryMessenger: controller.binaryMessenger
         )
+        faceMethodChannel = channel   // retain to prevent ARC dealloc
         channel.setMethodCallHandler { [weak self] call, result in
             guard let self = self else { return }
             switch call.method {
@@ -232,8 +251,9 @@ import MediaPipeTasksVision
     }
 
     private func setupFaceMeshChannel(controller: FlutterViewController) {
-        FlutterEventChannel(name: faceMeshChannelName, binaryMessenger: controller.binaryMessenger)
-            .setStreamHandler(SinkHandler { [weak self] sink in self?.faceMeshSink = sink })
+        let channel = FlutterEventChannel(name: faceMeshChannelName, binaryMessenger: controller.binaryMessenger)
+        faceMeshEventChannel = channel   // retain
+        channel.setStreamHandler(SinkHandler { [weak self] sink in self?.faceMeshSink = sink })
     }
 
     // MARK: - Frame Processing

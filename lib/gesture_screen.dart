@@ -277,6 +277,9 @@ class _GestureScreenState extends State<GestureScreen>
       // rotation: 用实际设备朝向计算，而非固定的 sensorOrientation
       final rotation = _calcRotation();
 
+      // Diagnostic: confirm Dart is sending frames
+      print('[Gesture][Dart] sending frame ${width}x$height rot=$rotation bpr=$bytesPerRow len=${bytes.length}');
+
       await _methodChannel.invokeMethod('processFrame', {
         'bytes': bytes,
         'width': width,
@@ -285,8 +288,7 @@ class _GestureScreenState extends State<GestureScreen>
         'rotation': rotation,
       });
     } catch (e) {
-      debugPrint('sendFrame error: $e');
-    }
+      print('[Gesture][Dart] sendFrame error: $e');
   }
 
   /// 根据设备朝向 + 传感器方向计算实际旋转角度（前置摄像头）
