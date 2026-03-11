@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'screens/face_detection_screen.dart';
 import 'gesture_screen.dart';
+import 'screens/tongue_capture_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,6 +53,7 @@ class _MainNavScreenState extends State<MainNavScreen> {
   // 用 key 强制在切换时重建页面，确保摄像头资源正确释放/重新初始化
   int _faceKey = 0;
   int _gestureKey = 0;
+  int _tongueKey = 0;
 
   void _onTabChanged(int index) {
     if (index == _currentIndex) return;
@@ -60,8 +62,10 @@ class _MainNavScreenState extends State<MainNavScreen> {
       // 切换时递增 key，强制重建目标页面以重新初始化摄像头
       if (index == 0) {
         _faceKey++;
-      } else {
+      } else if (index == 1) {
         _gestureKey++;
+      } else {
+        _tongueKey++;
       }
     });
   }
@@ -79,6 +83,9 @@ class _MainNavScreenState extends State<MainNavScreen> {
               : const SizedBox.shrink(),
           _currentIndex == 1
               ? GestureScreen(key: ValueKey('gesture_$_gestureKey'))
+              : const SizedBox.shrink(),
+          _currentIndex == 2
+              ? TongueCaptureScreen(key: ValueKey('tongue_$_tongueKey'))
               : const SizedBox.shrink(),
         ],
       ),
@@ -114,6 +121,13 @@ class _MainNavScreenState extends State<MainNavScreen> {
                 icon: Icons.back_hand_rounded,
                 label: '手势识别',
                 colors: [const Color(0xFF6C63FF), const Color(0xFFF093FB)],
+              ),
+              const SizedBox(width: 12),
+              _buildNavItem(
+                index: 2,
+                icon: Icons.medical_services_rounded,
+                label: '舌诊',
+                colors: [const Color(0xFFFF6B6B), const Color(0xFFFFD93D)],
               ),
             ],
           ),
