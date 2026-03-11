@@ -85,7 +85,7 @@ class _MainNavScreenState extends State<MainNavScreen> {
               ? GestureScreen(key: ValueKey('gesture_$_gestureKey'))
               : const SizedBox.shrink(),
           _currentIndex == 2
-              ? TongueCaptureScreen(key: ValueKey('tongue_$_tongueKey'))
+              ? TongueCaptureScreen(key: ValueKey('tongue_$_tongueKey'),claudeApiKey: 'sk-NhuFDxlwQhp8w0D5sfLftCdLg0XeUFrPZDljo3n9wJdwKm9p')
               : const SizedBox.shrink(),
         ],
       ),

@@ -12,8 +12,8 @@ import '../services/tongue_channel.dart';
 import '../utils/adaptive_throttle.dart';
 import 'tongue_result_screen.dart';
 
-/// 四步引导阶段
-enum _GuideStep { alignFace, openMouth, showTongue, holdStill }
+/// 三步引导阶段
+enum _GuideStep { alignFace, showTongue, holdStill }
 
 /// 舌诊采集全屏页（独立页面，通过 Navigator.push 打开）
 class TongueCaptureScreen extends StatefulWidget {
@@ -52,7 +52,7 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
 
   // ── 步骤标签 ─────────────────────────────────────────────────
   static const _stepLabels = [
-    '对准面部', '张开嘴巴', '伸出舌头', '保持不动',
+    '对准面部', '伸出舌头', '保持不动',
   ];
 
   @override
@@ -228,7 +228,6 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
 
   _GuideStep get _currentStep {
     if (!_guideState.faceDetected)  return _GuideStep.alignFace;
-    if (!_guideState.mouthOpen)     return _GuideStep.openMouth;
     if (!_guideState.tongueVisible) return _GuideStep.showTongue;
     return _GuideStep.holdStill;
   }
@@ -278,8 +277,17 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // ── 相机预览（全屏）────────────────────────────────
-          CameraPreview(_controller!),
+          // ── 相机预览（修正比例，不拉伸）──────────────────────
+          Positioned.fill(
+            child: FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: _controller!.value.previewSize!.height,
+                height: _controller!.value.previewSize!.width,
+                child: CameraPreview(_controller!),
+              ),
+            ),
+          ),
 
           // ── 暗色遮罩（非椭圆区域）──────────────────────────
           CustomPaint(
