@@ -337,15 +337,11 @@ import MediaPipeTasksVision
     }
 
     private func imageOrientation(for rotation: Int) -> UIImage.Orientation {
-        // iOS front camera: sensor outputs BGRA frames that are horizontally mirrored
-        // and need a 90° CCW rotation to appear upright in portrait.
-        // .leftMirrored  = rotate 90° CCW + flip horizontally → correct upright orientation
-        // for the front camera in portrait mode (sensorOrientation == 90).
         switch rotation {
-        case 90:  return .leftMirrored  // FIX: was .right (caused upside-down input to MediaPipe)
-        case 180: return .downMirrored
-        case 270: return .rightMirrored
-        default:  return .upMirrored
+        case 90:  return .right
+        case 180: return .down
+        case 270: return .left
+        default:  return .up
         }
     }
 }
@@ -381,10 +377,7 @@ extension AppDelegate: GestureRecognizerLiveStreamDelegate {
         guard let sink = landmarkSink else { return }
         var allHands: [[[String: Double]]] = []
         for handLandmarks in result.landmarks {
-            // FIX: Do NOT mirror x here. Flutter's HandLandmarkPainter does the
-            // front-camera mirror (1 - x) itself. Double-mirroring was causing
-            // the skeleton to render on the wrong side.
-            allHands.append(handLandmarks.map { ["x": Double($0.x), "y": Double($0.y)] })
+            allHands.append(handLandmarks.map { ["x": 1.0 - Double($0.x), "y": Double($0.y)] })
         }
         DispatchQueue.main.async {
             sink(["hands": allHands, "numHands": allHands.count])

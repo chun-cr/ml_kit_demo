@@ -300,9 +300,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       );
       if (inputImage == null) return;
 
+      // iOS: ML Kit 内部已处理旋转，boundingBox 坐标基于原始传感器尺寸
+      // （像素坐标，不需要对调宽高）。对调会导致坐标映射错误，人脸框偏移。
+      // Android: sensorOrientation=90/270 时需要对调，因为返回坐标是旋转后的。
       final rawSize = inputImage.metadata!.size;
       final so = _camera!.sensorOrientation;
-      _imageSize = (so == 90 || so == 270)
+      _imageSize = (!Platform.isIOS && (so == 90 || so == 270))
           ? Size(rawSize.height, rawSize.width)
           : rawSize;
 
