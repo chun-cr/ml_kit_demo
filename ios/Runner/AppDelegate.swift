@@ -136,9 +136,10 @@ import MediaPipeTasksVision
             let options = GestureRecognizerOptions()
             options.baseOptions = baseOptions
             options.runningMode = .liveStream
-            options.minHandDetectionConfidence = 0.7
-            options.minTrackingConfidence = 0.7
-            options.minHandPresenceConfidence = 0.7
+            // [Fix] Bug2: 阈值从 0.7 降回 0.5，弱光 / 遮挡时不在频繁丢失手部检测
+            options.minHandDetectionConfidence = 0.5
+            options.minTrackingConfidence = 0.5
+            options.minHandPresenceConfidence = 0.5
             options.numHands = 2
             options.gestureRecognizerLiveStreamDelegate = self
 

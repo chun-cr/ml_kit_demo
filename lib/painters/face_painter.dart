@@ -122,9 +122,33 @@ class FacePainter extends CustomPainter {
     required this.imageSize,
     required this.cameraLensDirection,
     required this.sensorOrientation,
+    this.isIos = false,
   });
 
+  /// iOS 标志位：坐标系与 Android 不同，需要单独处理
+  final bool isIos;
+
   // ── 坐标变换 ──────────────────────────────────────────────────
+
+  /// 将 ML Kit 坐标映射到屏幕坐标
+  ///
+  /// Android 路径：
+  ///   imageSize 已经对调宽高，x→screenWidth，y→screenHeight，前置摄像头镜像 x
+  ///
+  /// iOS 路径：
+  ///   imageSize 是原始传感器尺寸（portrait: width=短边≈480, height=长边≈640）
+  ///   sensorOrientation=90 → 图像需旋转90°：原始 x 对应屏幕 y，原始 y 对应屏幕 x
+  ///   前置摄像头：CameraPreview 不自动镜像，ML Kit iOS 也不自动镜像 bbox，
+  ///   需要沿 x 轴翻转（screenW - screenX）
+  Offset _toScreenOffsetIos(double x, double y, Size screenSize) {
+    // 传感器坐标 (x, y)，其中 x ∈ [0, imageSize.width], y ∈ [0, imageSize.height]
+    // sensorOrientation=90：旋转90° CW → 原始 x 轴变成屏幕 y 轴，原始 y 轴变成屏幕 x 轴
+    final screenX = (y / imageSize.height) * screenSize.width;
+    final screenY = (x / imageSize.width)  * screenSize.height;
+    // 前置摄像头镜像（CameraPreview 在 iOS 不自动镜像前置画面）
+    final mirroredX = screenSize.width - screenX;
+    return Offset(mirroredX, screenY);
+  }
 
   double _translateX(double x, Size screenSize) {
     if (cameraLensDirection == CameraLensDirection.front) {
@@ -168,23 +192,28 @@ class FacePainter extends CustomPainter {
     for (final face in faces) {
       final rect = face.boundingBox;
 
-      final topLeft = _toScreenOffset(
-        rect.left.toDouble(),
-        rect.top.toDouble(),
-        size,
-      );
-      final bottomRight = _toScreenOffset(
-        rect.right.toDouble(),
-        rect.bottom.toDouble(),
-        size,
-      );
-
-      final screenRect = Rect.fromLTRB(
-        topLeft.dx < bottomRight.dx ? topLeft.dx : bottomRight.dx,
-        topLeft.dy < bottomRight.dy ? topLeft.dy : bottomRight.dy,
-        topLeft.dx < bottomRight.dx ? bottomRight.dx : topLeft.dx,
-        topLeft.dy < bottomRight.dy ? bottomRight.dy : topLeft.dy,
-      );
+      final Rect screenRect;
+      if (isIos) {
+        // iOS: 传感器坐标 x/y 旋转映射 → 镜像
+        final tl = _toScreenOffsetIos(rect.left.toDouble(),  rect.top.toDouble(),    size);
+        final br = _toScreenOffsetIos(rect.right.toDouble(), rect.bottom.toDouble(), size);
+        screenRect = Rect.fromLTRB(
+          tl.dx < br.dx ? tl.dx : br.dx,
+          tl.dy < br.dy ? tl.dy : br.dy,
+          tl.dx < br.dx ? br.dx : tl.dx,
+          tl.dy < br.dy ? br.dy : tl.dy,
+        );
+      } else {
+        // Android: 直接用 _toScreenOffset（imageSize 已对调宽高）
+        final topLeft     = _toScreenOffset(rect.left.toDouble(),  rect.top.toDouble(),    size);
+        final bottomRight = _toScreenOffset(rect.right.toDouble(), rect.bottom.toDouble(), size);
+        screenRect = Rect.fromLTRB(
+          topLeft.dx < bottomRight.dx ? topLeft.dx : bottomRight.dx,
+          topLeft.dy < bottomRight.dy ? topLeft.dy : bottomRight.dy,
+          topLeft.dx < bottomRight.dx ? bottomRight.dx : topLeft.dx,
+          topLeft.dy < bottomRight.dy ? bottomRight.dy : topLeft.dy,
+        );
+      }
 
       canvas.drawRRect(
         RRect.fromRectAndRadius(screenRect, const Radius.circular(8)),

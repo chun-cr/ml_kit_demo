@@ -529,6 +529,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                                     imageSize: _imageSize ?? const Size(1, 1),
                                     cameraLensDirection: _camera!.lensDirection,
                                     sensorOrientation: _camera!.sensorOrientation,
+                                    isIos: true,
                                   ),
                                 ),
                               )

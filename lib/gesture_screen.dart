@@ -101,8 +101,9 @@ class _GestureScreenState extends State<GestureScreen>
   // ── 手势平滑（多数投票）────────────────────────────────────
   /// 最近 N 帧的手势名称队列
   final _gestureWindow = <String>[];
-  static const _windowSize  = 7;  // 滑动窗口大小
-  static const _voteThresh  = 5;  // 至少出现多少次才接受
+  // [Fix] Bug3: 窗口从 7 缩至 5、阈值从 5 降至 3（60% 即可更新，响应更快）
+  static const _windowSize  = 5;  // 滑动窗口大小
+  static const _voteThresh  = 3;  // 至少出现多少次才接受
 
   // ── 关键点数据（多手支持）──────────────────────────────────
   List<List<Offset>> _handsLandmarks = [];
@@ -303,8 +304,10 @@ class _GestureScreenState extends State<GestureScreen>
     if (_controller == null) return 0;
     final sensorOrientation = _controller!.description.sensorOrientation;
     if (Platform.isIOS) {
-      // iOS: 直接用 sensorOrientation（MLKit 约定，与 camera_utils.dart 一致）
-      return sensorOrientation;
+      // [Fix] Bug1: 前置摄像头 iOS 竖屏时 sensorOrientation 实际为 270，
+      // 但 MediaPipe 期望图像方向为 .right，对应值固定为 90。
+      // 直接返回 sensorOrientation（270）会让模型收到方向错误的图像，导致识别失败。
+      return 90;
     }
     // Android: 需要结合设备朝向补偿
     const orientationMap = {
