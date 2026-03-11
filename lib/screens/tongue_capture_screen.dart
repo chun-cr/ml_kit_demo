@@ -277,15 +277,12 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // ── 相机预览（修正比例，不拉伸）──────────────────────
+          // ── 相机预览（居中，保持真实比例，不拉伸且防放大）──────────────────
           Positioned.fill(
-            child: FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: _controller!.value.previewSize!.height,
-                height: _controller!.value.previewSize!.width,
-                child: CameraPreview(_controller!),
-              ),
+            child: Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: CameraPreview(_controller!),
             ),
           ),
 

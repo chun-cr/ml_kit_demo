@@ -43,8 +43,8 @@ import MediaPipeTasksVision
     private var tongueMethodChannel:    FlutterMethodChannel?
     private var tongueGuideSink:        FlutterEventSink?
     private var tongueCaptureSink:      FlutterEventSink?
-    // Stores the latest sampleBuffer for tongue capture
-    private var latestTongueSampleBuffer: CMSampleBuffer?
+    // Stores the latest image for tongue capture
+    private var latestTongueImage: UIImage?
 
     // MARK: - Throttle
 
@@ -462,8 +462,8 @@ extension AppDelegate: FaceLandmarkerLiveStreamDelegate {
         pushFaceMeshResult(result)
 
         // Pass to TongueDetector if active (additive, existing logic unchanged)
-        if let detector = tongueDetector, let sb = latestTongueSampleBuffer {
-            detector.processFrame(result: result, sampleBuffer: sb)
+        if let detector = tongueDetector, let img = latestTongueImage {
+            detector.processFrame(result: result, image: img)
         }
     }
 
@@ -515,9 +515,18 @@ extension AppDelegate {
                   let width       = args["width"]   as? Int,
                   let height      = args["height"]  as? Int,
                   let rotation    = args["rotation"] as? Int
-            else { result(FlutterMethodNotImplemented); return }
+             else { result(FlutterMethodNotImplemented); return }
 
             let bytesPerRow = (args["bytesPerRow"] as? Int) ?? (width * 4)
+
+            // 构建带有正确 orientation 的 UIImage
+            guard let cgImage = self.createCGImage(
+                from: bytes.data, width: width, height: height, bytesPerRow: bytesPerRow
+            ) else { return }
+            let uiImage = UIImage(
+                cgImage: cgImage, scale: 1.0, orientation: self.imageOrientation(for: rotation)
+            )
+            self.latestTongueImage = uiImage
 
             // Lazy-init TongueDetector and reuse the shared FaceLandmarker
             if self.tongueDetector == nil, let landmarker = self.faceLandmarker {
