@@ -39,10 +39,10 @@ final class TongueDetector {
     // MARK: Public API
 
     /// AppDelegate 在 FaceLandmarker 回调中调用此方法
-    /// result 是原始 FaceLandmarkerResult；pixelBuffer 是相机帧
+    /// result 是原始 FaceLandmarkerResult；image 是带有正确 orientation 的 UIImage
     func processFrame(
         result: FaceLandmarkerResult,
-        sampleBuffer: CMSampleBuffer
+        image: UIImage
     ) {
         let now = Date().timeIntervalSince1970
         guard now - lastProcessTime >= processIntervalSec else { return }
@@ -73,10 +73,9 @@ final class TongueDetector {
 
         // 舌头可见检测（红色像素分析）
         var tongueVisible = false
-        if mouthOpen,
-           let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+        if mouthOpen {
             tongueVisible = detectTongueInROI(
-                pixelBuffer: pixelBuffer,
+                uiImage: image,
                 landmarks: landmarks
             )
         }
@@ -115,7 +114,7 @@ final class TongueDetector {
         // 稳定后抓拍一次
         if isStable && !hasCaptured {
             hasCaptured = true
-            captureFrame(sampleBuffer: sampleBuffer)
+            captureFrame(image: image)
         }
     }
 
@@ -129,7 +128,7 @@ final class TongueDetector {
     // MARK: - 舌头 ROI 红色像素检测
 
     private func detectTongueInROI(
-        pixelBuffer: CVPixelBuffer,
+        uiImage: UIImage,
         landmarks: [NormalizedLandmark]
     ) -> Bool {
         // 嘴部 ROI 由 61(左嘴角) 291(右嘴角) 0(上唇顶) 17(下唇底) 围成
@@ -143,31 +142,52 @@ final class TongueDetector {
         let roiMinY = ys.min()!
         let roiMaxY = ys.max()! + 0.03  // 向下扩展一点覆盖舌头
 
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        let width    = CVPixelBufferGetWidth(pixelBuffer)
-        let height   = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return false }
+        let width    = uiImage.size.width
+        let height   = uiImage.size.height
 
         let xStart = max(0, Int(roiMinX * Float(width)))
-        let xEnd   = min(width - 1, Int(roiMaxX * Float(width)))
+        let xEnd   = min(Int(width) - 1, Int(roiMaxX * Float(width)))
         let yStart = max(0, Int(roiMinY * Float(height)))
-        let yEnd   = min(height - 1, Int(roiMaxY * Float(height)))
+        let yEnd   = min(Int(height) - 1, Int(roiMaxY * Float(height)))
+
+        let roiWidth = xEnd - xStart
+        let roiHeight = yEnd - yStart
+        guard roiWidth > 0 && roiHeight > 0 else { return false }
+
+        // 使用 CGContext 画出 ROI 区域的像素
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bytesPerRow = roiWidth * 4
+        var pixelData = [UInt8](repeating: 0, count: roiHeight * bytesPerRow)
+        
+        // 采用 RGBA 格式
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        
+        guard let context = CGContext(data: &pixelData,
+                                      width: roiWidth,
+                                      height: roiHeight,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: bytesPerRow,
+                                      space: colorSpace,
+                                      bitmapInfo: bitmapInfo.rawValue) else { return false }
+        
+        // 调整坐标系：将原图左上角偏移，使 ROI 的左上角对准 context 的 (0,0)
+        UIGraphicsPushContext(context)
+        context.translateBy(x: 0, y: CGFloat(roiHeight))
+        context.scaleBy(x: 1.0, y: -1.0) 
+        
+        uiImage.draw(at: CGPoint(x: -CGFloat(xStart), y: -CGFloat(yStart)))
+        UIGraphicsPopContext()
 
         var redCount = 0
         var total    = 0
 
-        let ptr = base.assumingMemoryBound(to: UInt8.self)
-
-        for y in yStart...yEnd {
-            for x in xStart...xEnd {
+        for y in 0..<roiHeight {
+            for x in 0..<roiWidth {
                 let offset = y * bytesPerRow + x * 4
-                // BGRA: B=offset+0, G=offset+1, R=offset+2, A=offset+3
-                let b = Double(ptr[offset])
-                let g = Double(ptr[offset + 1])
-                let r = Double(ptr[offset + 2])
+                // RGBA: R=offset+0, G=offset+1, B=offset+2, A=offset+3
+                let r = Double(pixelData[offset])
+                let g = Double(pixelData[offset + 1])
+                let b = Double(pixelData[offset + 2])
                 total += 1
 
                 // HSV 判断：S > 0.3, V > 0.3, H in [0, 20] or [340, 360]
@@ -201,15 +221,17 @@ final class TongueDetector {
 
     // MARK: - 抓拍
 
-    private func captureFrame(sampleBuffer: CMSampleBuffer) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-        // 将 CVPixelBuffer 转为 JPEG Data
-        let ciImage  = CIImage(cvPixelBuffer: pixelBuffer)
-        let context  = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
-        let uiImage  = UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
-        guard let jpeg = uiImage.jpegData(compressionQuality: 0.85) else { return }
+    private func captureFrame(image: UIImage) {
+        let size = image.size
+        // 如果图片带有 orientation，jpegData 默认会生成正确朝向的照片，但是它的原始 scale 和方向属性问题
+        // 为了确保抓拍出来在 flutter 展示端绝对正确且为正，可以把它重绘一下
+        UIGraphicsBeginImageContextWithOptions(size, false, 1.0)
+        image.draw(in: CGRect(origin: .zero, size: size))
+        let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        guard let finalImage = normalizedImage ?? image else { return }
+        guard let jpeg = finalImage.jpegData(compressionQuality: 0.85) else { return }
 
         delegate?.tongueDetector(self, didCapture: jpeg)
     }
