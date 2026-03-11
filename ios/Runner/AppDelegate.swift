@@ -35,6 +35,17 @@ import MediaPipeTasksVision
     private var landmarkEventChannel: FlutterEventChannel?
     private var faceMeshEventChannel: FlutterEventChannel?
 
+    // MARK: - Tongue Detection (new, additive)
+
+    private var tongueDetector:         TongueDetector?
+    private var tongueGuideEventChannel: FlutterEventChannel?
+    private var tongueCaptureEventChannel: FlutterEventChannel?
+    private var tongueMethodChannel:    FlutterMethodChannel?
+    private var tongueGuideSink:        FlutterEventSink?
+    private var tongueCaptureSink:      FlutterEventSink?
+    // Stores the latest sampleBuffer for tongue capture
+    private var latestTongueSampleBuffer: CMSampleBuffer?
+
     // MARK: - Throttle
 
     private var lastGestureTime:  TimeInterval = 0
@@ -76,6 +87,9 @@ import MediaPipeTasksVision
 
         setupFaceMethodChannel(controller: controller)
         setupFaceMeshChannel(controller: controller)
+
+        // Tongue channels (new, additive)
+        setupTongueChannels(controller: controller)
 
         NSLog("[AppDelegate] << all channels set up")
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
@@ -446,6 +460,11 @@ extension AppDelegate: FaceLandmarkerLiveStreamDelegate {
         lastFaceMeshTime = now
 
         pushFaceMeshResult(result)
+
+        // Pass to TongueDetector if active (additive, existing logic unchanged)
+        if let detector = tongueDetector, let sb = latestTongueSampleBuffer {
+            detector.processFrame(result: result, sampleBuffer: sb)
+        }
     }
 
     private func pushFaceMeshResult(_ result: FaceLandmarkerResult) {
@@ -474,5 +493,86 @@ class SinkHandler: NSObject, FlutterStreamHandler {
     }
     func onCancel(withArguments arguments: Any?) -> FlutterError? {
         onChanged(nil); return nil
+    }
+}
+
+// MARK: - Tongue Channel Setup (new extension, additive)
+
+extension AppDelegate {
+
+    func setupTongueChannels(controller: FlutterViewController) {
+        // MethodChannel: receive camera frames from Flutter
+        let mChannel = FlutterMethodChannel(
+            name: "tongue/frame",
+            binaryMessenger: controller.binaryMessenger
+        )
+        tongueMethodChannel = mChannel
+        mChannel.setMethodCallHandler { [weak self] call, result in
+            guard let self = self else { return }
+            guard call.method == "processFrame",
+                  let args        = call.arguments as? [String: Any],
+                  let bytes       = args["bytes"]   as? FlutterStandardTypedData,
+                  let width       = args["width"]   as? Int,
+                  let height      = args["height"]  as? Int,
+                  let rotation    = args["rotation"] as? Int
+            else { result(FlutterMethodNotImplemented); return }
+
+            let bytesPerRow = (args["bytesPerRow"] as? Int) ?? (width * 4)
+
+            // Lazy-init TongueDetector and reuse the shared FaceLandmarker
+            if self.tongueDetector == nil, let landmarker = self.faceLandmarker {
+                _ = landmarker  // FaceLandmarker already processes frames via faceMesh path
+                let detector = TongueDetector()
+                detector.delegate = self
+                self.tongueDetector = detector
+            }
+
+            // Build MPImage from the BGRA frame so FaceLandmarker can process it
+            if let mpImage = self.buildMPImage(
+                bytes: bytes.data,
+                width: width, height: height,
+                bytesPerRow: bytesPerRow,
+                rotation: rotation
+            ) {
+                // We route through the existing FaceLandmarker (shared instance)
+                // The delegate callback will forward to tongueDetector
+                let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+                do {
+                    try self.faceLandmarker?.detectAsync(image: mpImage, timestampInMilliseconds: timestamp)
+                } catch {
+                    NSLog("[TongueChannel] detectAsync error: %@", error.localizedDescription)
+                }
+            }
+            result(true)
+        }
+
+        // EventChannel: guide state
+        let gChannel = FlutterEventChannel(name: "tongue/guide/stream", binaryMessenger: controller.binaryMessenger)
+        tongueGuideEventChannel = gChannel
+        gChannel.setStreamHandler(SinkHandler { [weak self] sink in self?.tongueGuideSink = sink })
+
+        // EventChannel: capture image bytes
+        let cChannel = FlutterEventChannel(name: "tongue/capture/stream", binaryMessenger: controller.binaryMessenger)
+        tongueCaptureEventChannel = cChannel
+        cChannel.setStreamHandler(SinkHandler { [weak self] sink in self?.tongueCaptureSink = sink })
+    }
+}
+
+// MARK: - TongueDetectorDelegate
+
+extension AppDelegate: TongueDetectorDelegate {
+    func tongueDetector(_ detector: TongueDetector, didUpdateGuideState state: [String: Any]) {
+        DispatchQueue.main.async { [weak self] in
+            self?.tongueGuideSink?(state)
+        }
+    }
+
+    func tongueDetector(_ detector: TongueDetector, didCapture jpegData: Data) {
+        DispatchQueue.main.async { [weak self] in
+            // Send as FlutterStandardTypedData (Uint8List on Flutter side)
+            self?.tongueCaptureSink?(FlutterStandardTypedData(bytes: jpegData))
+            // Reset for next capture cycle
+            detector.reset()
+        }
     }
 }

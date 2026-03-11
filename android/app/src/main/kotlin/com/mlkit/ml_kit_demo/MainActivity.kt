@@ -75,6 +75,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         gestureRecognizer?.close()
         gestureRecognizer = null
+        tongueDetector?.close()
+        tongueDetector = null
         super.onDestroy()
     }
 
@@ -86,6 +88,66 @@ class MainActivity : FlutterActivity() {
         setupMethodChannel(flutterEngine)
         setupEventChannel(flutterEngine)
         setupLandmarkChannel(flutterEngine)
+
+        // Tongue channels (new, additive)
+        setupTongueChannels(flutterEngine)
+    }
+
+    // ── Tongue module additions ────────────────────────────────────
+    private var tongueDetector: TongueDetector? = null
+    private var tongueGuideSink:   EventChannel.EventSink? = null
+    private var tongueCaptureSink: EventChannel.EventSink? = null
+
+    private fun setupTongueChannels(flutterEngine: FlutterEngine) {
+        val detector = TongueDetector()
+        tongueDetector = detector
+        detector.listener = object : TongueDetectorListener {
+            override fun onGuideState(state: Map<String, Any>) {
+                mainHandler.post { tongueGuideSink?.success(state) }
+            }
+            override fun onCapture(jpegBytes: ByteArray) {
+                mainHandler.post { tongueCaptureSink?.success(jpegBytes) }
+                // reset for next cycle
+                detector.reset()
+            }
+        }
+
+        // MethodChannel: tongue/frame
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tongue/frame")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "processFrame") {
+                    val bytes    = call.argument<ByteArray>("bytes")
+                    val width    = call.argument<Int>("width")    ?: 0
+                    val height   = call.argument<Int>("height")   ?: 0
+                    val rotation = call.argument<Int>("rotation") ?: 0
+                    if (bytes != null && width > 0 && height > 0) {
+                        detector.processFrame(bytes, width, height, rotation)
+                        result.success(true)
+                    } else {
+                        result.error("INVALID_ARGS", "Missing frame data", null)
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
+
+        // EventChannel: tongue/guide/stream
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "tongue/guide/stream")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    tongueGuideSink = events
+                }
+                override fun onCancel(arguments: Any?) { tongueGuideSink = null }
+            })
+
+        // EventChannel: tongue/capture/stream
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "tongue/capture/stream")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    tongueCaptureSink = events
+                }
+                override fun onCancel(arguments: Any?) { tongueCaptureSink = null }
+            })
     }
 
     // ── 初始化 MediaPipe GestureRecognizer ──────────────────────
