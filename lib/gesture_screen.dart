@@ -98,6 +98,12 @@ class _GestureScreenState extends State<GestureScreen>
   String _handedness = '';
   int _numHands = 0;
 
+  // ── 手势平滑（多数投票）────────────────────────────────────
+  /// 最近 N 帧的手势名称队列
+  final _gestureWindow = <String>[];
+  static const _windowSize  = 7;  // 滑动窗口大小
+  static const _voteThresh  = 5;  // 至少出现多少次才接受
+
   // ── 关键点数据（多手支持）──────────────────────────────────
   List<List<Offset>> _handsLandmarks = [];
 
@@ -318,12 +324,41 @@ class _GestureScreenState extends State<GestureScreen>
       (event) {
         if (_isDisposed || !mounted) return;
         if (event is Map) {
-          setState(() {
-            _gesture = (event['gesture'] as String?) ?? 'None';
-            _confidence = (event['confidence'] as num?)?.toDouble() ?? 0.0;
-            _handedness = (event['handedness'] as String?) ?? '';
-            _numHands = (event['numHands'] as int?) ?? 0;
-          });
+          final rawGesture = (event['gesture'] as String?) ?? 'None';
+          final rawConf    = (event['confidence'] as num?)?.toDouble() ?? 0.0;
+          final rawHand    = (event['handedness'] as String?) ?? '';
+          final rawNum     = (event['numHands'] as int?) ?? 0;
+
+          // ── 滑动窗口投票平滑 ──────────────────────────────
+          _gestureWindow.add(rawGesture);
+          if (_gestureWindow.length > _windowSize) {
+            _gestureWindow.removeAt(0);
+          }
+
+          // 统计窗口内各手势出现次数
+          final counts = <String, int>{};
+          for (final g in _gestureWindow) {
+            counts[g] = (counts[g] ?? 0) + 1;
+          }
+
+          // 找出出现次数最多的手势
+          final best = counts.entries.reduce(
+            (a, b) => a.value >= b.value ? a : b,
+          );
+
+          // 只有超过投票阈值时才更新（窗口未满时降级为简单多数）
+          final minVotes = _gestureWindow.length < _windowSize
+              ? (_gestureWindow.length / 2).ceil()
+              : _voteThresh;
+
+          if (best.value >= minVotes) {
+            setState(() {
+              _gesture    = best.key;
+              _confidence = rawConf;
+              _handedness = rawHand;
+              _numHands   = rawNum;
+            });
+          }
         }
       },
       onError: (error) {
