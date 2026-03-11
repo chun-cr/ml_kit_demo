@@ -307,7 +307,7 @@ class _GestureScreenState extends State<GestureScreen>
       // [Fix] Bug1: 前置摄像头 iOS 竖屏时 sensorOrientation 实际为 270，
       // 但 MediaPipe 期望图像方向为 .right，对应值固定为 90。
       // 直接返回 sensorOrientation（270）会让模型收到方向错误的图像，导致识别失败。
-      return 90;
+      return 0;
     }
     // Android: 需要结合设备朝向补偿
     const orientationMap = {

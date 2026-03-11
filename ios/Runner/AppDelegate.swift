@@ -342,6 +342,7 @@ import MediaPipeTasksVision
         case 90:  return .right
         case 180: return .down
         case 270: return .left
+        case 0:   return .up
         default:  return .up
         }
     }
@@ -357,6 +358,9 @@ extension AppDelegate: GestureRecognizerLiveStreamDelegate {
         error: Error?
     ) {
         NSLog("[Gesture] << callback - gestures:%d error:%@", result?.gestures.count ?? -1, error?.localizedDescription ?? "nil")
+        NSLog("[Gesture] landmarks count: %d", result?.landmarks.count ?? -1)
+        NSLog("[Gesture] gestures count: %d", result?.gestures.count ?? -1)
+        NSLog("[Gesture] handedness count: %d", result?.handedness.count ?? -1)
         if let error = error {
             NSLog("[GestureRecognizer] callback error: %@", error.localizedDescription)
             return
