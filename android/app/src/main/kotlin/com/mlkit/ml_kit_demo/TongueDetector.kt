@@ -18,6 +18,7 @@ import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.face.FaceLandmark
+import com.google.mlkit.vision.face.FaceContour
 import java.io.ByteArrayOutputStream
 import kotlin.math.abs
 import kotlin.math.max
@@ -49,6 +50,7 @@ class TongueDetector {
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
             .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setContourMode(FaceDetectorOptions.CONTOUR_MODE_ALL)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
             .build()
     )
@@ -112,9 +114,15 @@ class TongueDetector {
     // ── 张嘴检测 ─────────────────────────────────────────────────
 
     private fun isMouthOpen(face: Face): Boolean {
-        val upperLip = face.getLandmark(FaceLandmark.MOUTH_TOP)    ?: return false
-        val lowerLip = face.getLandmark(FaceLandmark.MOUTH_BOTTOM) ?: return false
-        val gap = abs(lowerLip.position.y - upperLip.position.y)
+        val upperLip = face.getContour(FaceContour.UPPER_LIP_BOTTOM)?.points ?: return false
+        val lowerLip = face.getContour(FaceContour.LOWER_LIP_TOP)?.points    ?: return false
+        
+        // 取上下唇中点的距离
+        if (upperLip.isEmpty() || lowerLip.isEmpty()) return false
+        val upMidIdx = upperLip.size / 2
+        val loMidIdx = lowerLip.size / 2
+        
+        val gap = abs(lowerLip[loMidIdx].y - upperLip[upMidIdx].y)
         return gap > MOUTH_OPEN_THRESHOLD_PX
     }
 
@@ -123,14 +131,18 @@ class TongueDetector {
     private fun detectTongue(bitmap: Bitmap, face: Face): Boolean {
         val leftCorner  = face.getLandmark(FaceLandmark.MOUTH_LEFT)   ?: return false
         val rightCorner = face.getLandmark(FaceLandmark.MOUTH_RIGHT)  ?: return false
-        val upperLip    = face.getLandmark(FaceLandmark.MOUTH_TOP)    ?: return false
-        val lowerLip    = face.getLandmark(FaceLandmark.MOUTH_BOTTOM) ?: return false
+        val upperContour = face.getContour(FaceContour.UPPER_LIP_BOTTOM)?.points ?: return false
+        val lowerContour = face.getContour(FaceContour.LOWER_LIP_TOP)?.points    ?: return false
+        
+        if (upperContour.isEmpty() || lowerContour.isEmpty()) return false
+        val upperY = upperContour[upperContour.size / 2].y
+        val lowerY = lowerContour[lowerContour.size / 2].y
 
         val margin = 10
         val x1 = max(0, leftCorner.position.x.toInt()  - margin)
         val x2 = min(bitmap.width  - 1, rightCorner.position.x.toInt() + margin)
-        val y1 = max(0, upperLip.position.y.toInt()    - margin)
-        val y2 = min(bitmap.height - 1, lowerLip.position.y.toInt()   + margin + 20)
+        val y1 = max(0, upperY.toInt()    - margin)
+        val y2 = min(bitmap.height - 1, lowerY.toInt()   + margin + 30) // 向下多扩一点覆盖舌头
 
         if (x2 <= x1 || y2 <= y1) return false
 

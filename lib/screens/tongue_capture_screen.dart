@@ -68,6 +68,7 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
     );
 
     _tongueChannel.listenGuideState(_onGuideState);
+    _tongueChannel.listenCapture(_onCapture);
     _initAll();
   }
 
@@ -206,8 +207,6 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
     // 满足条件时原生层会通过 capture channel 推送图像；这里监听 isStable 锁定
     if (state.isStable && state.stableProgress >= 1.0 && !_captured) {
       _captured = true;
-      // 监听一次抓拍图像
-      _tongueChannel.listenCapture(_onCapture);
     }
   }
 

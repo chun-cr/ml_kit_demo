@@ -230,7 +230,7 @@ final class TongueDetector {
         let normalizedImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         
-        guard let finalImage = normalizedImage ?? image else { return }
+        let finalImage = normalizedImage ?? image
         guard let jpeg = finalImage.jpegData(compressionQuality: 0.85) else { return }
 
         delegate?.tongueDetector(self, didCapture: jpeg)
