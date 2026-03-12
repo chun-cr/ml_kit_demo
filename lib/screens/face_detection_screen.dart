@@ -43,6 +43,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   // iOS FaceLandmarker 结果：每张脸 478 个归一化坐标点
   // 格式：List<List<Offset>>，与 _meshes 用途相同但来源不同
   List<List<Offset>> _iosFaceLandmarks = [];
+  // Smoothing buffer: stores last N frames of landmarks per face
+  final List<List<List<Offset>>> _landmarkHistory = [];
+  static const int _smoothingFrames = 5; // average over 5 frames
 
   // ── 整体初始化状态 ──────────────────────────────────────────
   bool _isInitialized = false;
@@ -215,13 +218,53 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           }
           if (pts.isNotEmpty) parsed.add(pts);
         }
+        final smoothed = _smoothLandmarks(parsed);
         setState(() {
-          _iosFaceLandmarks = parsed;
-          _faceCount = parsed.length;
+          _iosFaceLandmarks = smoothed;
+          _faceCount = smoothed.length;
         });
       },
       onError: (e) => debugPrint('[FaceMeshChannel] error: $e'),
     );
+  }
+
+  List<List<Offset>> _smoothLandmarks(List<List<Offset>> newFrameLandmarks) {
+    // If face count changed, reset history
+    if (_landmarkHistory.isEmpty ||
+        _landmarkHistory[0].length != newFrameLandmarks.length) {
+      _landmarkHistory.clear();
+    }
+
+    _landmarkHistory.add(newFrameLandmarks);
+    if (_landmarkHistory.length > _smoothingFrames) {
+      _landmarkHistory.removeAt(0);
+    }
+
+    // Average coordinates across buffered frames
+    final smoothed = <List<Offset>>[];
+    final faceCount = newFrameLandmarks.length;
+    for (int f = 0; f < faceCount; f++) {
+      final pointCount = newFrameLandmarks[f].length;
+      final smoothedFace = <Offset>[];
+      for (int p = 0; p < pointCount; p++) {
+        double sx = 0, sy = 0;
+        int count = 0;
+        for (final frame in _landmarkHistory) {
+          if (f < frame.length && p < frame[f].length) {
+            sx += frame[f][p].dx;
+            sy += frame[f][p].dy;
+            count++;
+          }
+        }
+        smoothedFace.add(
+          count > 0
+              ? Offset(sx / count, sy / count)
+              : newFrameLandmarks[f][p],
+        );
+      }
+      smoothed.add(smoothedFace);
+    }
+    return smoothed;
   }
 
   // ── Image stream ──────────────────────────────────────────────
