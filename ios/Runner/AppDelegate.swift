@@ -20,6 +20,8 @@ import MediaPipeTasksVision
 
     private var gestureRecognizer: GestureRecognizer?
     private var faceLandmarker: FaceLandmarker?
+    private var gestureModelPath: String?
+    private var faceLandmarkerModelPath: String?
 
     // MARK: - Event Sinks
 
@@ -79,7 +81,10 @@ import MediaPipeTasksVision
         }
         NSLog("[AppDelegate] registrar OK, setting up channels")
 
-        setupFaceLandmarker(registrar: registrar)
+        gestureModelPath = findAsset(named: "gesture_recognizer.task", registrar: registrar)
+        faceLandmarkerModelPath = findAsset(named: "face_landmarker.task", registrar: registrar)
+
+        setupFaceLandmarker()
 
         setupGestureMethodChannel(controller: controller)
         setupGestureEventChannels(controller: controller)
@@ -136,8 +141,8 @@ import MediaPipeTasksVision
 
     // MARK: - Gesture Recognizer Init
 
-    private func setupGestureRecognizer(registrar: FlutterPluginRegistrar) {
-        guard let modelPath = findAsset(named: "gesture_recognizer.task", registrar: registrar) else {
+    private func setupGestureRecognizer() {
+        guard let modelPath = gestureModelPath else {
             NSLog("[GestureRecognizer] FAIL: Model file 'gesture_recognizer.task' not found in bundle")
             return
         }
@@ -165,8 +170,8 @@ import MediaPipeTasksVision
 
     // MARK: - Face Landmarker Init
 
-    private func setupFaceLandmarker(registrar: FlutterPluginRegistrar) {
-        guard let modelPath = findAsset(named: "face_landmarker.task", registrar: registrar) else {
+    private func setupFaceLandmarker() {
+        guard let modelPath = faceLandmarkerModelPath else {
             NSLog("[FaceLandmarker] FAIL: Model file 'face_landmarker.task' not found in bundle")
             return
         }
@@ -506,11 +511,7 @@ extension AppDelegate {
 
     private func warmupGestureRecognizerIfNeeded() {
         guard gestureRecognizer == nil else { return }
-        guard let registrar = self.registrar(forPlugin: "AppDelegatePlugin") else {
-            NSLog("[GestureRecognizer] FAIL: registrar unavailable during warmup")
-            return
-        }
-        setupGestureRecognizer(registrar: registrar)
+        setupGestureRecognizer()
     }
 
     func setupTongueChannels(controller: FlutterViewController) {
