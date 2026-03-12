@@ -54,7 +54,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   int _faceCount = 0;
 
   // ── 自适应帧率控制 ────────────────────────────────────────────
-  final _detectThrottle = AdaptiveThrottle();
+  final _detectThrottle = AdaptiveThrottle(
+    minInterval: 33,
+    maxInterval: 100,
+    targetProcessTime: 80,
+  );
   final _paintThrottle = AdaptiveThrottle(
     minInterval: 30,
     maxInterval: 30,
@@ -62,7 +66,11 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   );
 
   // ── iOS 帧发送节流（与手势识别共享同一套逻辑）──────────────
-  final _iosFaceThrottle = AdaptiveThrottle();
+  final _iosFaceThrottle = AdaptiveThrottle(
+    minInterval: 33,
+    maxInterval: 100,
+    targetProcessTime: 80,
+  );
 
   // ── Lifecycle ─────────────────────────────────────────────────
 
@@ -347,14 +355,16 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           ? Size(rawSize.height, rawSize.width)
           : rawSize;
 
-      final faces = await _faceDetector!.processImage(inputImage);
-
-      List<FaceMesh> meshes = [];
-      try {
-        if (_faceMeshDetector != null) {
-          meshes = await _faceMeshDetector!.processImage(inputImage);
-        }
-      } catch (_) {}
+      final results = await Future.wait([
+        _faceDetector!.processImage(inputImage),
+        _faceMeshDetector != null
+            ? _faceMeshDetector!
+                .processImage(inputImage)
+                .catchError((_) => <FaceMesh>[])
+            : Future.value(<FaceMesh>[]),
+      ]);
+      final faces = results[0] as List<Face>;
+      final meshes = results[1] as List<FaceMesh>;
 
       if (mounted && !_isDisposed) {
         setState(() {

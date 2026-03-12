@@ -194,15 +194,12 @@ class FacePainter extends CustomPainter {
 
       final Rect screenRect;
       if (isIos) {
-        // iOS: 传感器坐标 x/y 旋转映射 → 镜像
-        final tl = _toScreenOffsetIos(rect.left.toDouble(),  rect.top.toDouble(),    size);
-        final br = _toScreenOffsetIos(rect.right.toDouble(), rect.bottom.toDouble(), size);
-        screenRect = Rect.fromLTRB(
-          tl.dx < br.dx ? tl.dx : br.dx,
-          tl.dy < br.dy ? tl.dy : br.dy,
-          tl.dx < br.dx ? br.dx : tl.dx,
-          tl.dy < br.dy ? br.dy : tl.dy,
-        );
+        // iOS: 与 _drawIosFaceLandmarks 使用同一坐标系，仅做镜像缩放，不做旋转轴交换
+        final left = (1.0 - rect.right / imageSize.width) * size.width;
+        final right = (1.0 - rect.left / imageSize.width) * size.width;
+        final top = (rect.top / imageSize.height) * size.height;
+        final bottom = (rect.bottom / imageSize.height) * size.height;
+        screenRect = Rect.fromLTRB(left, top, right, bottom);
       } else {
         // Android: 直接用 _toScreenOffset（imageSize 已对调宽高）
         final topLeft     = _toScreenOffset(rect.left.toDouble(),  rect.top.toDouble(),    size);
