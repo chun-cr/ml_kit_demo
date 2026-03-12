@@ -79,7 +79,6 @@ import MediaPipeTasksVision
         }
         NSLog("[AppDelegate] registrar OK, setting up channels")
 
-        setupGestureRecognizer(registrar: registrar)
         setupFaceLandmarker(registrar: registrar)
 
         setupGestureMethodChannel(controller: controller)
@@ -205,7 +204,11 @@ import MediaPipeTasksVision
             guard let self = self else { return }
             NSLog("[Gesture] MethodChannel invoked: %@", call.method)
             switch call.method {
+            case "warmup":
+                self.warmupGestureRecognizerIfNeeded()
+                result(true)
             case "processFrame":
+                self.warmupGestureRecognizerIfNeeded()
                 guard let args = call.arguments as? [String: Any],
                       let bytes = args["bytes"] as? FlutterStandardTypedData,
                       let width = args["width"] as? Int,
@@ -296,6 +299,7 @@ import MediaPipeTasksVision
     private func processGestureFrame(bytes: Data, width: Int, height: Int,
                                      bytesPerRow: Int, rotation: Int) {
         NSLog("[Gesture] >> frame arrived - %dx%d rot:%d bytes:%d recognizer:%d", width, height, rotation, bytes.count, gestureRecognizer != nil ? 1 : 0)
+        warmupGestureRecognizerIfNeeded()
         guard let recognizer = gestureRecognizer else { return }
         guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height,
                                          bytesPerRow: bytesPerRow, rotation: rotation) else { return }
@@ -500,6 +504,15 @@ class SinkHandler: NSObject, FlutterStreamHandler {
 
 extension AppDelegate {
 
+    private func warmupGestureRecognizerIfNeeded() {
+        guard gestureRecognizer == nil else { return }
+        guard let registrar = self.registrar(forPlugin: "AppDelegatePlugin") else {
+            NSLog("[GestureRecognizer] FAIL: registrar unavailable during warmup")
+            return
+        }
+        setupGestureRecognizer(registrar: registrar)
+    }
+
     func setupTongueChannels(controller: FlutterViewController) {
         // MethodChannel: receive camera frames from Flutter
         let mChannel = FlutterMethodChannel(
@@ -509,6 +522,15 @@ extension AppDelegate {
         tongueMethodChannel = mChannel
         mChannel.setMethodCallHandler { [weak self] call, result in
             guard let self = self else { return }
+            if call.method == "warmup" {
+                if self.tongueDetector == nil {
+                    let detector = TongueDetector()
+                    detector.delegate = self
+                    self.tongueDetector = detector
+                }
+                result(true)
+                return
+            }
             guard call.method == "processFrame",
                   let args        = call.arguments as? [String: Any],
                   let bytes       = args["bytes"]   as? FlutterStandardTypedData,

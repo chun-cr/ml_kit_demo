@@ -5,6 +5,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'services/module_preloader.dart';
 import 'utils/adaptive_throttle.dart';
 
 /// 手势 → Emoji 映射
@@ -180,6 +181,7 @@ class _GestureScreenState extends State<GestureScreen>
     if (mounted) setState(() => _isInitialized = false);
 
     try {
+      await ModulePreloader.warmupGesture();
       // 手势识别的 MediaPipe 初始化在原生层 (MainActivity/AppDelegate) 完成，
       // Flutter 端只需初始化相机
       await _initCamera();

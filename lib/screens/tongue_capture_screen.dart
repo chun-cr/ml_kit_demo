@@ -2,13 +2,13 @@
 
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/tongue_channel.dart';
+import '../services/module_preloader.dart';
 import '../utils/adaptive_throttle.dart';
 import 'tongue_result_screen.dart';
 
@@ -45,6 +45,8 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
 
   // ── 抓拍防重入 ────────────────────────────────────────────────
   bool _captured = false;
+  bool _isResultPageOpen = false;
+  bool _isNavigatingToResult = false;
 
   // ── 椭圆描边动画控制器 ────────────────────────────────────────
   late AnimationController _ovalController;
@@ -76,7 +78,7 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_isDisposed) return;
     if (state == AppLifecycleState.paused)  _releaseCamera();
-    if (state == AppLifecycleState.resumed) _initAll();
+    if (state == AppLifecycleState.resumed && !_isResultPageOpen) _initAll();
   }
 
   @override
@@ -96,6 +98,7 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
     if (_isDisposed) return;
     if (mounted) setState(() => _isInitialized = false);
     try {
+      await ModulePreloader.warmupTongue();
       await _initCamera();
       if (_isDisposed) return;
       if (_controller != null && _controller!.value.isInitialized) {
@@ -170,7 +173,9 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
     final start = DateTime.now().millisecondsSinceEpoch;
     try {
       final plane      = image.planes.first;
-      final rotation   = Platform.isIOS ? 90 : _calcAndroidRotation();
+      final rotation   = Platform.isIOS
+          ? _controller!.description.sensorOrientation
+          : _calcAndroidRotation();
       await _tongueChannel.sendFrame(
         bytes:      plane.bytes,
         width:      image.width,
@@ -210,17 +215,36 @@ class _TongueCaptureScreenState extends State<TongueCaptureScreen>
     }
   }
 
-  void _onCapture(Uint8List jpeg) {
-    if (_isDisposed || !mounted) return;
+  Future<void> _onCapture(Uint8List jpeg) async {
+    if (_isDisposed || !mounted || _isNavigatingToResult) return;
+    _isNavigatingToResult = true;
+    _isResultPageOpen = true;
     _stopStream();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => TongueResultScreen(
-          imageBytes:    jpeg,
-          claudeApiKey:  widget.claudeApiKey,
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => TongueResultScreen(
+            imageBytes:    jpeg,
+            claudeApiKey:  widget.claudeApiKey,
+          ),
         ),
-      ),
-    );
+      );
+
+      if (_isDisposed || !mounted) return;
+      setState(() {
+        _captured = false;
+        _guideState = TongueGuideState.idle();
+      });
+
+      if (_controller != null && _controller!.value.isInitialized) {
+        _startStream();
+      } else {
+        await _initAll();
+      }
+    } finally {
+      _isResultPageOpen = false;
+      _isNavigatingToResult = false;
+    }
   }
 
   // ── 当前引导阶段 ─────────────────────────────────────────────
@@ -442,7 +466,7 @@ class _OvalMaskPainter extends CustomPainter {
       ..addRect(Rect.fromLTWH(0, 0, size.width, size.height))
       ..addOval(ovalRect)
       ..fillType = PathFillType.evenOdd;
-    canvas.drawPath(maskPath, Paint()..color = Colors.black.withOpacity(0.55));
+    canvas.drawPath(maskPath, Paint()..color = Colors.black.withValues(alpha: 0.55));
 
     // 椭圆描边
     canvas.drawOval(

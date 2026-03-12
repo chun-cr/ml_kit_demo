@@ -84,7 +84,6 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        setupGestureRecognizer()
         setupMethodChannel(flutterEngine)
         setupEventChannel(flutterEngine)
         setupLandmarkChannel(flutterEngine)
@@ -98,36 +97,53 @@ class MainActivity : FlutterActivity() {
     private var tongueGuideSink:   EventChannel.EventSink? = null
     private var tongueCaptureSink: EventChannel.EventSink? = null
 
-    private fun setupTongueChannels(flutterEngine: FlutterEngine) {
+    private fun ensureGestureRecognizer() {
+        if (gestureRecognizer == null) {
+            setupGestureRecognizer()
+        }
+    }
+
+    private fun ensureTongueDetector(): TongueDetector {
+        tongueDetector?.let { return it }
+
         val detector = TongueDetector()
-        tongueDetector = detector
         detector.listener = object : TongueDetectorListener {
             override fun onGuideState(state: Map<String, Any>) {
                 mainHandler.post { tongueGuideSink?.success(state) }
             }
+
             override fun onCapture(jpegBytes: ByteArray) {
                 mainHandler.post { tongueCaptureSink?.success(jpegBytes) }
-                // reset for next cycle
                 detector.reset()
             }
         }
 
+        tongueDetector = detector
+        return detector
+    }
+
+    private fun setupTongueChannels(flutterEngine: FlutterEngine) {
         // MethodChannel: tongue/frame
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "tongue/frame")
             .setMethodCallHandler { call, result ->
-                if (call.method == "processFrame") {
-                    val bytes    = call.argument<ByteArray>("bytes")
-                    val width    = call.argument<Int>("width")    ?: 0
-                    val height   = call.argument<Int>("height")   ?: 0
-                    val rotation = call.argument<Int>("rotation") ?: 0
-                    if (bytes != null && width > 0 && height > 0) {
-                        detector.processFrame(bytes, width, height, rotation)
+                when (call.method) {
+                    "warmup" -> {
+                        ensureTongueDetector()
                         result.success(true)
-                    } else {
-                        result.error("INVALID_ARGS", "Missing frame data", null)
                     }
-                } else {
-                    result.notImplemented()
+                    "processFrame" -> {
+                        val bytes    = call.argument<ByteArray>("bytes")
+                        val width    = call.argument<Int>("width")    ?: 0
+                        val height   = call.argument<Int>("height")   ?: 0
+                        val rotation = call.argument<Int>("rotation") ?: 0
+                        if (bytes != null && width > 0 && height > 0) {
+                            ensureTongueDetector().processFrame(bytes, width, height, rotation)
+                            result.success(true)
+                        } else {
+                            result.error("INVALID_ARGS", "Missing frame data", null)
+                        }
+                    }
+                    else -> result.notImplemented()
                 }
             }
 
@@ -185,7 +201,12 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "warmup" -> {
+                        ensureGestureRecognizer()
+                        result.success(true)
+                    }
                     "processFrame" -> {
+                        ensureGestureRecognizer()
                         val bytes = call.argument<ByteArray>("bytes")
                         val width = call.argument<Int>("width") ?: 0
                         val height = call.argument<Int>("height") ?: 0
@@ -237,6 +258,7 @@ class MainActivity : FlutterActivity() {
 
     // ── 帧处理：NV21 ByteArray → Bitmap → MPImage → recognizeAsync ─
     private fun processFrame(nv21Bytes: ByteArray, width: Int, height: Int, rotation: Int) {
+        ensureGestureRecognizer()
         if (gestureRecognizer == null) return
 
         try {
