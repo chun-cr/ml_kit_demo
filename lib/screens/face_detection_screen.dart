@@ -61,14 +61,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     adaptive: false,
   );
 
-  // ── iOS 面部描点检测节流 ────────────────────────────────────
-  // 固定为 100ms 一次，避免自适应在高性能设备上提升到 30fps，
-  // 从源头减少发送到原生 MediaPipe FaceLandmarker 的推理频率。
-  final _iosFaceThrottle = AdaptiveThrottle(
-    minInterval: 100,
-    maxInterval: 100,
-    adaptive: false,
-  );
+  // ── iOS 帧发送节流（与手势识别共享同一套逻辑）──────────────
+  final _iosFaceThrottle = AdaptiveThrottle();
 
   // ── Lifecycle ─────────────────────────────────────────────────
 
