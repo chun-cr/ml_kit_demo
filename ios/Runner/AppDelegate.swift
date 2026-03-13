@@ -183,7 +183,7 @@ import MediaPipeTasksVision
             let options = FaceLandmarkerOptions()
             options.baseOptions = baseOptions
             options.runningMode = .liveStream
-            options.numFaces = 2
+            options.numFaces = 1
             // 戴眼镜/局部遮挡时，提高阈值可减少低质量“幽灵点位”进入 Flutter。
             // tracking 提得更高一些，优先稳定跟踪；宁可重检，也尽量少输出漂移 landmarks。
             options.minFaceDetectionConfidence = 0.6
@@ -484,11 +484,15 @@ extension AppDelegate: FaceLandmarkerLiveStreamDelegate {
         // result.faceLandmarks: [[NormalizedLandmark]]，每张脸 478 个点（normalized 0~1）
         let faces: [[[String: Double]]] = result.faceLandmarks.map { landmarks in
             landmarks.map { lm in
-                ["x": 1.0 - Double(lm.x), "y": Double(lm.y), "z": Double(lm.z)]
+                ["x": Double(lm.x), "y": Double(lm.y), "z": Double(lm.z)]
             }
         }
         DispatchQueue.main.async {
-            sink(["faces": faces, "numFaces": faces.count])
+            sink([
+                "faces": faces,
+                "numFaces": faces.count,
+                "timestampMs": Int(Date().timeIntervalSince1970 * 1000)
+            ])
         }
     }
 }
