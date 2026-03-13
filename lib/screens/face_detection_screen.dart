@@ -25,9 +25,6 @@ class FaceDetectionScreen extends StatefulWidget {
 
 class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     with WidgetsBindingObserver {
-  static const List<int> _leftEyeIndices = [33, 133, 159, 145, 160, 144, 158, 153];
-  static const List<int> _rightEyeIndices = [362, 263, 386, 374, 387, 373, 385, 380];
-
   // ── 相机相关 ─────────────────────────────────────────────────
   CameraController? _cameraController;
   CameraDescription? _camera;
@@ -289,11 +286,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     for (int i = 0; i < candidates.length; i++) {
       final candidate = candidates[i];
       final previous = _lastGoodIosFaceLandmarks[i];
-      if (_isLandmarkTransitionStable(previous, candidate) &&
-          _isPeriocularRegionStable(previous, candidate)) {
+      if (_isLandmarkTransitionStable(previous, candidate)) {
         filtered.add(candidate);
-      } else {
-        filtered.add(List<Offset>.from(previous));
       }
     }
     return filtered;
@@ -331,57 +325,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         heightRatio < 1.3;
   }
 
-  bool _isPeriocularRegionStable(
-    List<Offset> previous,
-    List<Offset> candidate,
-  ) {
-    final previousFaceBounds = _computeLandmarkBounds(previous);
-    final faceScale = previousFaceBounds.width > 0
-        ? previousFaceBounds.width
-        : previousFaceBounds.height;
-    if (faceScale <= 0) return true;
-
-    return _isRegionStable(
-          previous,
-          candidate,
-          _leftEyeIndices,
-          faceScale,
-        ) &&
-        _isRegionStable(
-          previous,
-          candidate,
-          _rightEyeIndices,
-          faceScale,
-        );
-  }
-
-  bool _isRegionStable(
-    List<Offset> previous,
-    List<Offset> candidate,
-    List<int> indices,
-    double faceScale,
-  ) {
-    final previousBounds = _computeIndexedBounds(previous, indices);
-    final candidateBounds = _computeIndexedBounds(candidate, indices);
-    if (previousBounds == null || candidateBounds == null) return true;
-
-    final centerShift =
-        (candidateBounds.center - previousBounds.center).distance / faceScale;
-
-    final previousWidth = previousBounds.width;
-    final previousHeight = previousBounds.height;
-    if (previousWidth <= 0 || previousHeight <= 0) return true;
-
-    final widthRatio = candidateBounds.width / previousWidth;
-    final heightRatio = candidateBounds.height / previousHeight;
-
-    return centerShift < 0.04 &&
-        widthRatio > 0.6 &&
-        widthRatio < 1.4 &&
-        heightRatio > 0.55 &&
-        heightRatio < 1.5;
-  }
-
   Rect _computeLandmarkBounds(List<Offset> landmarks) {
     double minX = double.infinity;
     double maxX = double.negativeInfinity;
@@ -395,27 +338,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       if (pt.dy > maxY) maxY = pt.dy;
     }
 
-    return Rect.fromLTRB(minX, minY, maxX, maxY);
-  }
-
-  Rect? _computeIndexedBounds(List<Offset> landmarks, List<int> indices) {
-    double minX = double.infinity;
-    double maxX = double.negativeInfinity;
-    double minY = double.infinity;
-    double maxY = double.negativeInfinity;
-    var hasPoint = false;
-
-    for (final index in indices) {
-      if (index < 0 || index >= landmarks.length) continue;
-      final pt = landmarks[index];
-      hasPoint = true;
-      if (pt.dx < minX) minX = pt.dx;
-      if (pt.dx > maxX) maxX = pt.dx;
-      if (pt.dy < minY) minY = pt.dy;
-      if (pt.dy > maxY) maxY = pt.dy;
-    }
-
-    if (!hasPoint) return null;
     return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
