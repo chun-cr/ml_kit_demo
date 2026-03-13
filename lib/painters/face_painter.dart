@@ -135,21 +135,6 @@ class FacePainter extends CustomPainter {
   /// Android 路径：
   ///   imageSize 已经对调宽高，x→screenWidth，y→screenHeight，前置摄像头镜像 x
   ///
-  /// iOS 路径：
-  ///   imageSize 是原始传感器尺寸（portrait: width=短边≈480, height=长边≈640）
-  ///   sensorOrientation=90 → 图像需旋转90°：原始 x 对应屏幕 y，原始 y 对应屏幕 x
-  ///   前置摄像头：CameraPreview 不自动镜像，ML Kit iOS 也不自动镜像 bbox，
-  ///   需要沿 x 轴翻转（screenW - screenX）
-  Offset _toScreenOffsetIos(double x, double y, Size screenSize) {
-    // 传感器坐标 (x, y)，其中 x ∈ [0, imageSize.width], y ∈ [0, imageSize.height]
-    // sensorOrientation=90：旋转90° CW → 原始 x 轴变成屏幕 y 轴，原始 y 轴变成屏幕 x 轴
-    final screenX = (y / imageSize.height) * screenSize.width;
-    final screenY = (x / imageSize.width)  * screenSize.height;
-    // 前置摄像头镜像（CameraPreview 在 iOS 不自动镜像前置画面）
-    final mirroredX = screenSize.width - screenX;
-    return Offset(mirroredX, screenY);
-  }
-
   double _translateX(double x, Size screenSize) {
     if (cameraLensDirection == CameraLensDirection.front) {
       return screenSize.width - (x / imageSize.width) * screenSize.width;
@@ -434,7 +419,7 @@ class FacePainter extends CustomPainter {
 
   // ---------------------------------------------------------------------------
   // iOS: MediaPipe FaceLandmarker 归一化点绘制
-  // 坐标已经是 0~1 归一化，前置摄像头需要镜像 x
+  // 坐标已经是 0~1 归一化，当前原生回传已与预览方向一致，这里不再额外镜像 x
   // ---------------------------------------------------------------------------
 
   void _drawIosFaceLandmarks(Canvas canvas, Size size) {
@@ -447,7 +432,7 @@ class FacePainter extends CustomPainter {
     for (final landmarks in iosFaceLandmarks) {
       if (landmarks.isEmpty) continue;
       for (final lm in landmarks) {
-        final x = (1.0 - lm.dx) * size.width;
+        final x = lm.dx * size.width;
         final y = lm.dy * size.height;
         canvas.drawCircle(Offset(x, y), 1.2, dotPaint);
       }
@@ -467,7 +452,7 @@ class FacePainter extends CustomPainter {
 
     Offset toScreen(int idx) {
       final pt = lm[idx];
-      return Offset((1.0 - pt.dx) * size.width, pt.dy * size.height);
+      return Offset(pt.dx * size.width, pt.dy * size.height);
     }
 
     void drawContour(List<int> indices) {
