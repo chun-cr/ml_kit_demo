@@ -184,9 +184,11 @@ import MediaPipeTasksVision
             options.baseOptions = baseOptions
             options.runningMode = .liveStream
             options.numFaces = 2
-            options.minFaceDetectionConfidence = 0.5
-            options.minTrackingConfidence = 0.5
-            options.minFacePresenceConfidence = 0.5
+            // 戴眼镜/局部遮挡时，提高阈值可减少低质量“幽灵点位”进入 Flutter。
+            // tracking 提得更高一些，优先稳定跟踪；宁可重检，也尽量少输出漂移 landmarks。
+            options.minFaceDetectionConfidence = 0.6
+            options.minTrackingConfidence = 0.7
+            options.minFacePresenceConfidence = 0.6
             options.faceLandmarkerLiveStreamDelegate = self
 
             faceLandmarker = try FaceLandmarker(options: options)

@@ -43,11 +43,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   // iOS FaceLandmarker 结果：每张脸 478 个归一化坐标点
   // 格式：List<List<Offset>>，与 _meshes 用途相同但来源不同
   List<List<Offset>> _iosFaceLandmarks = [];
+  List<List<Offset>> _lastGoodIosFaceLandmarks = [];
   // Smoothing buffer: stores last N frames of landmarks per face
   final List<List<List<Offset>>> _landmarkHistory = [];
   static const int _smoothingFrames = 8; // increase from 5 to 8
   int _emptyFrameCount = 0;
-  static const int _maxEmptyFrames = 3;
+  static const int _maxEmptyFrames = 6;
 
   // ── 整体初始化状态 ──────────────────────────────────────────
   bool _isInitialized = false;
@@ -204,7 +205,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         if (event is! Map) return;
         final facesRaw = event['faces'];
         if (facesRaw is! List) {
-          setState(() => _iosFaceLandmarks = []);
+          _landmarkHistory.clear();
+          _lastGoodIosFaceLandmarks = [];
+          setState(() {
+            _iosFaceLandmarks = [];
+            _faceCount = 0;
+          });
           return;
         }
         final parsed = <List<Offset>>[];
@@ -222,10 +228,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
             parsed.add(pts);
           }
         }
-        if (parsed.isEmpty) {
+        final stableParsed = _filterUnstableLandmarks(parsed);
+        if (stableParsed.isEmpty) {
           _emptyFrameCount++;
           if (_emptyFrameCount >= _maxEmptyFrames) {
             _landmarkHistory.clear();
+            _lastGoodIosFaceLandmarks = [];
             setState(() {
               _iosFaceLandmarks = [];
               _faceCount = 0;
@@ -233,7 +241,10 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           }
         } else {
           _emptyFrameCount = 0;
-          final smoothed = _smoothLandmarks(parsed);
+          final smoothed = _smoothLandmarks(stableParsed);
+          _lastGoodIosFaceLandmarks = smoothed
+              .map((face) => List<Offset>.from(face))
+              .toList();
           setState(() {
             _iosFaceLandmarks = smoothed;
             _faceCount = smoothed.length;
@@ -263,6 +274,71 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
     // Valid face landmarks should spread at least 5% of the normalized image in both axes
     return spreadX > 0.05 && spreadY > 0.05;
+  }
+
+  List<List<Offset>> _filterUnstableLandmarks(List<List<Offset>> candidates) {
+    if (_lastGoodIosFaceLandmarks.isEmpty ||
+        _lastGoodIosFaceLandmarks.length != candidates.length) {
+      return candidates;
+    }
+
+    final filtered = <List<Offset>>[];
+    for (int i = 0; i < candidates.length; i++) {
+      final candidate = candidates[i];
+      final previous = _lastGoodIosFaceLandmarks[i];
+      if (_isLandmarkTransitionStable(previous, candidate)) {
+        filtered.add(candidate);
+      }
+    }
+    return filtered;
+  }
+
+  bool _isLandmarkTransitionStable(
+    List<Offset> previous,
+    List<Offset> candidate,
+  ) {
+    if (previous.length < 100 || candidate.length < 100) return false;
+
+    final previousBounds = _computeLandmarkBounds(previous);
+    final candidateBounds = _computeLandmarkBounds(candidate);
+
+    final previousCenter = previousBounds.center;
+    final candidateCenter = candidateBounds.center;
+    final centerShift = (candidateCenter - previousCenter).distance;
+
+    final previousWidth = previousBounds.width;
+    final previousHeight = previousBounds.height;
+    final candidateWidth = candidateBounds.width;
+    final candidateHeight = candidateBounds.height;
+
+    if (previousWidth <= 0 || previousHeight <= 0) return true;
+
+    final widthRatio = candidateWidth / previousWidth;
+    final heightRatio = candidateHeight / previousHeight;
+
+    // 眼镜反光/遮挡导致的异常帧通常表现为：
+    // 1) 面部中心瞬间大跳；2) 点集边界突然塌缩或膨胀。
+    return centerShift < 0.12 &&
+        widthRatio > 0.7 &&
+        widthRatio < 1.3 &&
+        heightRatio > 0.7 &&
+        heightRatio < 1.3;
+  }
+
+  Rect _computeLandmarkBounds(List<Offset> landmarks) {
+    double minX = double.infinity;
+    double maxX = double.negativeInfinity;
+    double minY = double.infinity;
+    double maxY = double.negativeInfinity;
+
+    for (final pt in landmarks) {
+      if (pt.dx < minX) minX = pt.dx;
+      if (pt.dx > maxX) maxX = pt.dx;
+      if (pt.dy < minY) minY = pt.dy;
+      if (pt.dy > maxY) maxY = pt.dy;
+    }
+
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
   List<List<Offset>> _smoothLandmarks(List<List<Offset>> newFrameLandmarks) {
