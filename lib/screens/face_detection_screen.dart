@@ -45,7 +45,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   List<List<Offset>> _iosFaceLandmarks = [];
   // Smoothing buffer: stores last N frames of landmarks per face
   final List<List<List<Offset>>> _landmarkHistory = [];
-  static const int _smoothingFrames = 5; // average over 5 frames
+  static const int _smoothingFrames = 8; // increase from 5 to 8
+  int _emptyFrameCount = 0;
+  static const int _maxEmptyFrames = 3;
 
   // ── 整体初始化状态 ──────────────────────────────────────────
   bool _isInitialized = false;
@@ -216,16 +218,51 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
               pts.add(Offset(x, y));
             }
           }
-          if (pts.isNotEmpty) parsed.add(pts);
+          if (pts.isNotEmpty && _isLandmarkSetValid(pts)) {
+            parsed.add(pts);
+          }
         }
-        final smoothed = _smoothLandmarks(parsed);
-        setState(() {
-          _iosFaceLandmarks = smoothed;
-          _faceCount = smoothed.length;
-        });
+        if (parsed.isEmpty) {
+          _emptyFrameCount++;
+          if (_emptyFrameCount >= _maxEmptyFrames) {
+            _landmarkHistory.clear();
+            setState(() {
+              _iosFaceLandmarks = [];
+              _faceCount = 0;
+            });
+          }
+        } else {
+          _emptyFrameCount = 0;
+          final smoothed = _smoothLandmarks(parsed);
+          setState(() {
+            _iosFaceLandmarks = smoothed;
+            _faceCount = smoothed.length;
+          });
+        }
       },
       onError: (e) => debugPrint('[FaceMeshChannel] error: $e'),
     );
+  }
+
+  /// Returns true if landmark set looks valid (points spread across a reasonable area)
+  bool _isLandmarkSetValid(List<Offset> landmarks) {
+    if (landmarks.length < 100) return false;
+
+    double minX = double.infinity, maxX = 0;
+    double minY = double.infinity, maxY = 0;
+
+    for (final pt in landmarks) {
+      if (pt.dx < minX) minX = pt.dx;
+      if (pt.dx > maxX) maxX = pt.dx;
+      if (pt.dy < minY) minY = pt.dy;
+      if (pt.dy > maxY) maxY = pt.dy;
+    }
+
+    final spreadX = maxX - minX;
+    final spreadY = maxY - minY;
+
+    // Valid face landmarks should spread at least 5% of the normalized image in both axes
+    return spreadX > 0.05 && spreadY > 0.05;
   }
 
   List<List<Offset>> _smoothLandmarks(List<List<Offset>> newFrameLandmarks) {
