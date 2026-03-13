@@ -195,8 +195,8 @@ class FacePainter extends CustomPainter {
       final Rect screenRect;
       if (isIos) {
         // iOS: 与 _drawIosFaceLandmarks 使用同一坐标系，仅做镜像缩放，不做旋转轴交换
-        final left = (1.0 - rect.right / imageSize.width) * size.width;
-        final right = (1.0 - rect.left / imageSize.width) * size.width;
+        final left = (rect.right / imageSize.width) * size.width;
+        final right = (rect.left / imageSize.width) * size.width;
         final top = (rect.top / imageSize.height) * size.height;
         final bottom = (rect.bottom / imageSize.height) * size.height;
         screenRect = Rect.fromLTRB(left, top, right, bottom);
