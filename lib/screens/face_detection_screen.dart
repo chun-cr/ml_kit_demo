@@ -44,11 +44,14 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   // 格式：List<List<Offset>>，与 _meshes 用途相同但来源不同
   List<List<Offset>> _iosFaceLandmarks = [];
   List<List<Offset>> _lastGoodIosFaceLandmarks = [];
-  // Smoothing buffer: stores last N frames of landmarks per face
-  final List<List<List<Offset>>> _landmarkHistory = [];
-  static const int _smoothingFrames = 8; // increase from 5 to 8
+  // EMA 平滑后的持久状态（每个点的上一帧平滑结果）
+  List<List<Offset>> _smoothedLandmarks = [];
+  // EMA 平滑因子：越小越平滑但延迟越大，0.35 在流畅与响应间取得平衡
+  static const double _emaAlpha = 0.35;
+  // 单点帧间最大跳变阈值（归一化坐标），超过则视为异常飞点
+  static const double _outlierThreshold = 0.06;
   int _emptyFrameCount = 0;
-  static const int _maxEmptyFrames = 6;
+  static const int _maxEmptyFrames = 15;
 
   // ── 整体初始化状态 ──────────────────────────────────────────
   bool _isInitialized = false;
@@ -205,7 +208,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         if (event is! Map) return;
         final facesRaw = event['faces'];
         if (facesRaw is! List) {
-          _landmarkHistory.clear();
+          _smoothedLandmarks = [];
           _lastGoodIosFaceLandmarks = [];
           setState(() {
             _iosFaceLandmarks = [];
@@ -232,7 +235,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         if (stableParsed.isEmpty) {
           _emptyFrameCount++;
           if (_emptyFrameCount >= _maxEmptyFrames) {
-            _landmarkHistory.clear();
+            _smoothedLandmarks = [];
             _lastGoodIosFaceLandmarks = [];
             setState(() {
               _iosFaceLandmarks = [];
@@ -241,7 +244,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
           }
         } else {
           _emptyFrameCount = 0;
-          final smoothed = _smoothLandmarks(stableParsed);
+          final smoothed = _smoothLandmarksEMA(stableParsed);
           _lastGoodIosFaceLandmarks = smoothed
               .map((face) => List<Offset>.from(face))
               .toList();
@@ -316,13 +319,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     final widthRatio = candidateWidth / previousWidth;
     final heightRatio = candidateHeight / previousHeight;
 
-    // 眼镜反光/遮挡导致的异常帧通常表现为：
-    // 1) 面部中心瞬间大跳；2) 点集边界突然塌缩或膨胀。
-    return centerShift < 0.12 &&
-        widthRatio > 0.7 &&
-        widthRatio < 1.3 &&
-        heightRatio > 0.7 &&
-        heightRatio < 1.3;
+    // 放宽整体边界阈值，由 EMA + 单点异常值过滤来精细处理飞点；
+    // 这里只拦截真正的"幽灵帧"（面部突然跳到完全不同的位置）。
+    return centerShift < 0.20 &&
+        widthRatio > 0.55 &&
+        widthRatio < 1.5 &&
+        heightRatio > 0.55 &&
+        heightRatio < 1.5;
   }
 
   Rect _computeLandmarkBounds(List<Offset> landmarks) {
@@ -341,43 +344,57 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
-  List<List<Offset>> _smoothLandmarks(List<List<Offset>> newFrameLandmarks) {
-    // If face count changed, reset history
-    if (_landmarkHistory.isEmpty ||
-        _landmarkHistory[0].length != newFrameLandmarks.length) {
-      _landmarkHistory.clear();
+  /// EMA 平滑 + 单点异常值过滤
+  ///
+  /// 相比旧版 N 帧算术平均，EMA 有两个优势：
+  /// 1. 不需要维护历史缓冲区，只需上一帧平滑结果
+  /// 2. 单点异常值检测可以精准过滤"飞点"而不丢弃整帧
+  List<List<Offset>> _smoothLandmarksEMA(List<List<Offset>> newFrameLandmarks) {
+    // 首次检测或人脸数量变化 → 直接用原始值初始化
+    if (_smoothedLandmarks.isEmpty ||
+        _smoothedLandmarks.length != newFrameLandmarks.length) {
+      _smoothedLandmarks = newFrameLandmarks
+          .map((face) => List<Offset>.from(face))
+          .toList();
+      return _smoothedLandmarks;
     }
 
-    _landmarkHistory.add(newFrameLandmarks);
-    if (_landmarkHistory.length > _smoothingFrames) {
-      _landmarkHistory.removeAt(0);
-    }
-
-    // Average coordinates across buffered frames
-    final smoothed = <List<Offset>>[];
-    final faceCount = newFrameLandmarks.length;
-    for (int f = 0; f < faceCount; f++) {
-      final pointCount = newFrameLandmarks[f].length;
+    final result = <List<Offset>>[];
+    for (int f = 0; f < newFrameLandmarks.length; f++) {
+      final newFace = newFrameLandmarks[f];
+      final prevFace = _smoothedLandmarks[f];
       final smoothedFace = <Offset>[];
+      final pointCount = newFace.length;
+
       for (int p = 0; p < pointCount; p++) {
-        double sx = 0, sy = 0;
-        int count = 0;
-        for (final frame in _landmarkHistory) {
-          if (f < frame.length && p < frame[f].length) {
-            sx += frame[f][p].dx;
-            sy += frame[f][p].dy;
-            count++;
+        if (p < prevFace.length) {
+          final prev = prevFace[p];
+          final curr = newFace[p];
+          final delta = (curr - prev).distance;
+
+          if (delta > _outlierThreshold) {
+            // 异常飞点：几乎保持上一帧的值，只允许极微小的漂移
+            // 这样即使是真的大幅移动，也会在后续帧中逐渐跟上
+            smoothedFace.add(Offset(
+              prev.dx + (curr.dx - prev.dx) * 0.05,
+              prev.dy + (curr.dy - prev.dy) * 0.05,
+            ));
+          } else {
+            // 正常范围：EMA 指数移动平均
+            smoothedFace.add(Offset(
+              prev.dx * (1 - _emaAlpha) + curr.dx * _emaAlpha,
+              prev.dy * (1 - _emaAlpha) + curr.dy * _emaAlpha,
+            ));
           }
+        } else {
+          smoothedFace.add(newFace[p]);
         }
-        smoothedFace.add(
-          count > 0
-              ? Offset(sx / count, sy / count)
-              : newFrameLandmarks[f][p],
-        );
       }
-      smoothed.add(smoothedFace);
+      result.add(smoothedFace);
     }
-    return smoothed;
+
+    _smoothedLandmarks = result;
+    return result;
   }
 
   // ── Image stream ──────────────────────────────────────────────

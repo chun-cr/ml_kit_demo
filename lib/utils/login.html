@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Modern Login - Creative Mobile UI</title>
+<!-- BEGIN: External Resources -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700&amp;display=swap" rel="stylesheet"/>
+<!-- END: External Resources -->
+<!-- BEGIN: Global Configuration -->
+<script data-purpose="tailwind-config">
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              purple: '#6366f1',
+              orange: '#f97316',
+              dark: '#0f172a'
+            }
+          },
+          animation: {
+            'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+          }
+        }
+      }
+    }
+  </script>
+<!-- END: Global Configuration -->
+<style data-purpose="custom-gradients">
+    .bg-main-gradient {
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #f97316 100%);
+    }
+    .glass-effect {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    .input-border-focus {
+      transition: all 0.3s ease;
+    }
+    .input-border-focus:focus-within {
+      border-bottom-color: #f97316;
+      transform: translateY(-2px);
+    }
+    .login-btn-glow {
+      box-shadow: 0 10px 25px -5px rgba(249, 115, 22, 0.4);
+    }
+  </style>
+</head>
+<body class="bg-brand-dark min-h-screen flex items-center justify-center font-sans antialiased overflow-hidden">
+<!-- BEGIN: Background Elements -->
+<div class="fixed inset-0 z-0 overflow-hidden">
+<div class="absolute top-[-10%] left-[-10%] w-64 h-64 bg-purple-600 rounded-full mix-blend-screen filter blur-3xl opacity-30 animate-pulse-slow"></div>
+<div class="absolute bottom-[-10%] right-[-10%] w-80 h-80 bg-orange-500 rounded-full mix-blend-screen filter blur-3xl opacity-20 animate-pulse-slow"></div>
+<div class="absolute inset-0 bg-main-gradient opacity-80"></div>
+</div>
+<!-- END: Background Elements -->
+<!-- BEGIN: Main Container -->
+<main class="relative z-10 w-full max-w-[400px] min-h-screen p-8 flex flex-col justify-between" data-purpose="mobile-screen-container">
+<!-- BEGIN: Header Section -->
+<header class="pt-12 text-center" data-purpose="login-header">
+<!-- Logo Placeholder -->
+<div class="flex justify-center mb-8">
+<div class="w-16 h-16 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center rotate-12 border border-white/30 shadow-xl">
+<div class="w-8 h-8 bg-white rounded-lg -rotate-12 flex items-center justify-center">
+<div class="w-4 h-4 bg-brand-orange rounded-full"></div>
+</div>
+</div>
+</div>
+<h1 class="text-4xl font-bold text-white tracking-tight mb-2">Welcome Back</h1>
+<p class="text-white/70 text-sm font-light">Sign in to continue your creative journey</p>
+</header>
+<!-- END: Header Section -->
+<!-- BEGIN: Login Form -->
+<section class="mt-12" data-purpose="login-form-container">
+<form class="space-y-8" id="login-form">
+<!-- Email Field -->
+<div class="input-border-focus border-b border-white/30 pb-2">
+<label class="block text-[10px] uppercase tracking-widest text-white/50 mb-1 ml-1" for="email">Email Address</label>
+<input class="w-full bg-transparent border-none text-white placeholder:text-white/20 focus:ring-0 text-base py-1 px-1" id="email" placeholder="hello@example.com" required="" type="email"/>
+</div>
+<!-- Password Field -->
+<div class="input-border-focus border-b border-white/30 pb-2">
+<label class="block text-[10px] uppercase tracking-widest text-white/50 mb-1 ml-1" for="password">Password</label>
+<div class="relative">
+<input class="w-full bg-transparent border-none text-white placeholder:text-white/20 focus:ring-0 text-base py-1 px-1" id="password" placeholder="••••••••" required="" type="password"/>
+<button class="absolute right-2 top-1 text-white/40 hover:text-white" type="button">
+<svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+<path d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" stroke-linecap="round" stroke-linejoin="round"></path>
+<path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+</button>
+</div>
+</div>
+<!-- Forgot Password -->
+<div class="flex justify-end">
+<a class="text-xs text-white/60 hover:text-white transition-colors" href="#">Forgot Password?</a>
+</div>
+<!-- Login Button -->
+<button class="w-full py-4 bg-white text-brand-dark font-bold rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all login-btn-glow" type="submit">
+          Login Now
+        </button>
+</form>
+</section>
+<!-- END: Login Form -->
+<!-- BEGIN: Social Login & Footer -->
+<footer class="mt-auto pb-8 space-y-8" data-purpose="social-login-footer">
+<div class="flex items-center gap-4">
+<div class="h-[1px] flex-1 bg-white/20"></div>
+<span class="text-xs text-white/40 uppercase tracking-widest">Or login with</span>
+<div class="h-[1px] flex-1 bg-white/20"></div>
+</div>
+<div class="flex justify-center gap-6">
+<!-- Google Button -->
+<button class="w-14 h-14 glass-effect rounded-2xl flex items-center justify-center hover:bg-white/20 transition-all">
+<svg class="w-6 h-6" viewbox="0 0 24 24">
+<path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z" fill="white"></path>
+</svg>
+</button>
+<!-- Apple Button -->
+<button class="w-14 h-14 glass-effect rounded-2xl flex items-center justify-center hover:bg-white/20 transition-all">
+<svg class="w-6 h-6" viewbox="0 0 24 24">
+<path d="M17.05 20.28c-.96.95-2.12 1.95-3.52 1.95s-1.84-.91-3.52-.91c-1.68 0-2.24.89-3.52.92-1.39.02-2.73-1.1-3.76-2.58C1.4 17.8 0 14.7 0 11.97c0-4.32 2.67-6.61 5.25-6.61 1.36 0 2.51.89 3.52.89s2.16-.9 3.52-.9c1.17 0 2.44.47 3.33 1.54-3.11 1.76-2.61 5.92.51 7.21-1.03 2.48-2.12 5.18-3.08 6.18zM12.03 5.07c-.02-2.77 2.29-5.07 4.97-5.07.13 2.88-2.64 5.33-4.97 5.07z" fill="white"></path>
+</svg>
+</button>
+</div>
+<div class="text-center">
+<p class="text-sm text-white/60">
+          Don't have an account? 
+          <a class="text-white font-semibold underline decoration-orange-500/50 underline-offset-4" href="#">Sign Up</a>
+</p>
+</div>
+</footer>
+<!-- END: Social Login & Footer -->
+</main>
+<!-- END: Main Container -->
+<script data-purpose="form-interactivity">
+    // Simple visual feedback for form submission
+    document.getElementById('login-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector('button[type="submit"]');
+      const originalText = btn.innerText;
+      
+      btn.innerText = 'Authenticating...';
+      btn.style.opacity = '0.7';
+      btn.disabled = true;
+
+      setTimeout(() => {
+        btn.innerText = originalText;
+        btn.style.opacity = '1';
+        btn.disabled = false;
+        alert('Visual demo: Login sequence initiated.');
+      }, 1500);
+    });
+  </script>
+</body></html>
