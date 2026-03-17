@@ -246,10 +246,11 @@ final class TongueDetector {
         let allBlendshapes = result.faceBlendshapes
         guard !allBlendshapes.isEmpty else { return (0, false) }
 
-        guard let score = allBlendshapes
+        let category = allBlendshapes
             .flatMap { $0 }
-            .first(where: { ($0.categoryName ?? "").lowercased() == "tongueout" })?
-            .score else {
+            .first(where: { ($0.categoryName ?? "").lowercased() == "tongueout" })
+
+        guard let score = category?.score else {
             return (0, false)
         }
 
