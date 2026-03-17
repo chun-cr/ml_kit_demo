@@ -1,7 +1,6 @@
 import Flutter
 import UIKit
 import MediaPipeTasksVision
-import Vision
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -13,27 +12,29 @@ import Vision
     private let gestureChannelName  = "gesture/stream"
     private let landmarkChannelName = "landmark/stream"
 
-    private let nativeFaceScanChannelName = "face/native"
+    private let faceFrameChannelName = "face/frame"
+    private let faceMeshChannelName  = "face/mesh/stream"
 
     // MARK: - MediaPipe & Vision
 
     private var gestureRecognizer: GestureRecognizer?
     private var gestureModelPath: String?
-    
-    // Replace FaceLandmarker with Vision sequence handler for stabilization
-    private var visionSequenceHandler = VNSequenceRequestHandler()
+    private var faceLandmarkerModelPath: String?
+    private var faceLandmarker: FaceLandmarker?
+    private var lastFaceImageSize: CGSize = .zero
 
     // MARK: - Event Sinks
 
     private var gestureSink: FlutterEventSink?
     private var landmarkSink: FlutterEventSink?
+    private var faceMeshSink: FlutterEventSink?
     // MARK: - Retained Channels (prevent ARC dealloc)
 
     private var gestureMethodChannel: FlutterMethodChannel?
-    private var nativeFaceScanMethodChannel: FlutterMethodChannel?
+    private var faceMethodChannel: FlutterMethodChannel?
     private var gestureEventChannel:  FlutterEventChannel?
     private var landmarkEventChannel: FlutterEventChannel?
-    private var pendingNativeFaceScanResult: FlutterResult?
+    private var faceMeshEventChannel: FlutterEventChannel?
 
     // MARK: - Tongue Detection (additive)
 
@@ -43,18 +44,22 @@ import Vision
     private var tongueMethodChannel:    FlutterMethodChannel?
     private var tongueGuideSink:        FlutterEventSink?
     private var tongueCaptureSink:      FlutterEventSink?
-    
-    // Stores the latest image for tongue capture
+
     private var latestTongueImage: UIImage?
+    private var lastTongueFrameTime: TimeInterval = 0
+    private let tongueFrameActiveWindowSec: TimeInterval = 0.35
 
     // MARK: - Throttle
 
     private var lastGestureTime:  TimeInterval = 0
     private var lastLandmarkTime: TimeInterval = 0
+    private var lastFaceMeshTime: TimeInterval = 0
     private let gestureIntervalSec:  TimeInterval = 0.1   // 100ms
     private let landmarkIntervalSec: TimeInterval = 0.03  // 30ms
+    private let faceMeshIntervalSec: TimeInterval = 0.033
 
     private var gestureFrameTimestamp: Int = 0
+    private var faceFrameTimestamp: Int = 0
 
     // MARK: - Lifecycle
 
@@ -74,11 +79,13 @@ import Vision
         }
 
         gestureModelPath = findAsset(named: "gesture_recognizer.task", registrar: registrar)
+        faceLandmarkerModelPath = findAsset(named: "face_landmarker.task", registrar: registrar)
 
         setupGestureMethodChannel(controller: controller)
         setupGestureEventChannels(controller: controller)
 
-        setupNativeFaceScanChannel(controller: controller)
+        setupFaceMethodChannel(controller: controller)
+        setupFaceMeshChannel(controller: controller)
 
         setupTongueChannels(controller: controller)
 
@@ -86,53 +93,43 @@ import Vision
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    private func setupNativeFaceScanChannel(controller: FlutterViewController) {
+    private func setupFaceMethodChannel(controller: FlutterViewController) {
         let channel = FlutterMethodChannel(
-            name: nativeFaceScanChannelName,
+            name: faceFrameChannelName,
             binaryMessenger: controller.binaryMessenger
         )
-        nativeFaceScanMethodChannel = channel
-        channel.setMethodCallHandler { [weak self, weak controller] call, result in
-            guard let self = self, let controller = controller else { return }
-            guard call.method == "startScan" else {
-                result(FlutterMethodNotImplemented)
-                return
-            }
-
-            guard self.pendingNativeFaceScanResult == nil else {
-                result(FlutterError(code: "SCAN_IN_PROGRESS", message: "Native face scan already running", details: nil))
-                return
-            }
-
-            let scanner = NativeFaceScanViewController()
-            scanner.modalPresentationStyle = .fullScreen
-            scanner.onFinish = { [weak self, weak scanner] payload in
-                guard let self = self else { return }
-                let finishResult = self.pendingNativeFaceScanResult
-                self.pendingNativeFaceScanResult = nil
-
-                if let scanner = scanner, scanner.presentingViewController != nil {
-                    scanner.dismiss(animated: true) {
-                        finishResult?(payload)
-                    }
-                } else {
-                    finishResult?(payload)
+        faceMethodChannel = channel
+        channel.setMethodCallHandler { [weak self] call, result in
+            guard let self = self else { return }
+            switch call.method {
+            case "warmup":
+                self.warmupFaceLandmarkerIfNeeded()
+                result(true)
+            case "processFrame":
+                self.warmupFaceLandmarkerIfNeeded()
+                guard let args = call.arguments as? [String: Any],
+                      let bytes = args["bytes"] as? FlutterStandardTypedData,
+                      let width = args["width"] as? Int,
+                      let height = args["height"] as? Int,
+                      let rotation = args["rotation"] as? Int
+                else {
+                    result(FlutterError(code: "INVALID_ARGS", message: "Missing frame data", details: nil))
+                    return
                 }
+                let bytesPerRow = (args["bytesPerRow"] as? Int) ?? (width * 4)
+                self.processFaceFrame(bytes: bytes.data, width: width, height: height,
+                                      bytesPerRow: bytesPerRow, rotation: rotation)
+                result(true)
+            default:
+                result(FlutterMethodNotImplemented)
             }
-
-            self.pendingNativeFaceScanResult = result
-
-            let presenter = self.topViewController(from: controller) ?? controller
-            presenter.present(scanner, animated: true)
         }
     }
 
-    private func topViewController(from controller: UIViewController) -> UIViewController? {
-        var current: UIViewController? = controller
-        while let presented = current?.presentedViewController {
-            current = presented
-        }
-        return current
+    private func setupFaceMeshChannel(controller: FlutterViewController) {
+        let channel = FlutterEventChannel(name: faceMeshChannelName, binaryMessenger: controller.binaryMessenger)
+        faceMeshEventChannel = channel
+        channel.setStreamHandler(SinkHandler { [weak self] sink in self?.faceMeshSink = sink })
     }
 
     // MARK: - Asset Path Helper
@@ -186,6 +183,27 @@ import Vision
 
             gestureRecognizer = try GestureRecognizer(options: options)
         } catch {}
+    }
+
+    private func setupFaceLandmarker() {
+        guard let modelPath = faceLandmarkerModelPath else { return }
+        do {
+            let baseOptions = BaseOptions()
+            baseOptions.modelAssetPath = modelPath
+
+            let options = FaceLandmarkerOptions()
+            options.baseOptions = baseOptions
+            options.runningMode = .liveStream
+            options.numFaces = 2
+            options.minFaceDetectionConfidence = 0.5
+            options.minFacePresenceConfidence = 0.5
+            options.minTrackingConfidence = 0.5
+            options.outputFaceBlendshapes = true
+            options.faceLandmarkerLiveStreamDelegate = self
+            faceLandmarker = try FaceLandmarker(options: options)
+        } catch {
+            NSLog("[FaceLandmarker] setup error: %@", error.localizedDescription)
+        }
     }
 
     // MARK: - Gesture Channels
@@ -264,6 +282,30 @@ import Vision
         } catch {}
     }
 
+    private func processFaceFrame(bytes: Data, width: Int, height: Int,
+                                  bytesPerRow: Int, rotation: Int) {
+        warmupFaceLandmarkerIfNeeded()
+        guard let faceLandmarker = faceLandmarker else { return }
+        guard let mpImage = buildMPImage(bytes: bytes, width: width, height: height,
+                                         bytesPerRow: bytesPerRow, rotation: rotation) else { return }
+
+        if rotation == 90 || rotation == 270 {
+            lastFaceImageSize = CGSize(width: CGFloat(height), height: CGFloat(width))
+        } else {
+            lastFaceImageSize = CGSize(width: CGFloat(width), height: CGFloat(height))
+        }
+
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        guard timestamp > faceFrameTimestamp else { return }
+        faceFrameTimestamp = timestamp
+
+        do {
+            try faceLandmarker.detectAsync(image: mpImage, timestampInMilliseconds: timestamp)
+        } catch {
+            NSLog("[FaceLandmarker] detectAsync error: %@", error.localizedDescription)
+        }
+    }
+
     // MARK: - Image Helpers
 
     private func createCGImage(from data: Data, width: Int, height: Int, bytesPerRow: Int) -> CGImage? {
@@ -294,15 +336,6 @@ import Vision
         }
     }
     
-    private func cgImagePropertyOrientation(for rotation: Int) -> CGImagePropertyOrientation {
-        switch rotation {
-        case 90:  return .right
-        case 180: return .down
-        case 270: return .left
-        case 0:   return .up
-        default:  return .up
-        }
-    }
 }
 
 // MARK: - GestureRecognizerLiveStreamDelegate
@@ -377,6 +410,32 @@ extension AppDelegate: GestureRecognizerLiveStreamDelegate {
     }
 }
 
+extension AppDelegate: FaceLandmarkerLiveStreamDelegate {
+    func faceLandmarker(
+        _ faceLandmarker: FaceLandmarker,
+        didFinishDetection result: FaceLandmarkerResult?,
+        timestampInMilliseconds: Int,
+        error: Error?
+    ) {
+        if let error = error {
+            NSLog("[FaceLandmarker] callback error: %@", error.localizedDescription)
+            return
+        }
+        guard let result = result else { return }
+        let now = Date().timeIntervalSince1970
+        if now - lastFaceMeshTime >= faceMeshIntervalSec {
+            lastFaceMeshTime = now
+            pushFaceMeshResult(result)
+        }
+
+        if now - lastTongueFrameTime <= tongueFrameActiveWindowSec,
+           let image = latestTongueImage,
+           let detector = tongueDetector {
+            detector.processFrame(result: result, image: image)
+        }
+    }
+}
+
 // MARK: - Stream Handler Helper
 
 class SinkHandler: NSObject, FlutterStreamHandler {
@@ -398,6 +457,37 @@ extension AppDelegate {
     private func warmupGestureRecognizerIfNeeded() {
         guard gestureRecognizer == nil else { return }
         setupGestureRecognizer()
+    }
+
+    private func warmupFaceLandmarkerIfNeeded() {
+        guard faceLandmarker == nil else { return }
+        setupFaceLandmarker()
+    }
+
+    private func pushFaceMeshResult(_ result: FaceLandmarkerResult) {
+        guard let sink = faceMeshSink else { return }
+
+        var faces: [[[String: Double]]] = []
+        for landmarks in result.faceLandmarks {
+            let points = landmarks.map { landmark in
+                [
+                    "x": Double(landmark.x),
+                    "y": Double(landmark.y),
+                    "z": Double(landmark.z),
+                ]
+            }
+            faces.append(points)
+        }
+
+        DispatchQueue.main.async {
+            sink([
+                "faces": faces,
+                "numFaces": faces.count,
+                "imageWidth": Double(self.lastFaceImageSize.width),
+                "imageHeight": Double(self.lastFaceImageSize.height),
+                "timestampMs": Int(Date().timeIntervalSince1970 * 1000),
+            ])
+        }
     }
 
     func setupTongueChannels(controller: FlutterViewController) {
@@ -429,11 +519,15 @@ extension AppDelegate {
 
             guard let cgImage = self.createCGImage(
                 from: bytes.data, width: width, height: height, bytesPerRow: bytesPerRow
-            ) else { return }
+            ) else {
+                result(FlutterError(code: "INVALID_IMAGE", message: "Failed to create image for tongue frame", details: nil))
+                return
+            }
             let uiImage = UIImage(
                 cgImage: cgImage, scale: 1.0, orientation: self.imageOrientation(for: rotation)
             )
             self.latestTongueImage = uiImage
+            self.lastTongueFrameTime = Date().timeIntervalSince1970
 
             if self.tongueDetector == nil {
                 let detector = TongueDetector()
@@ -441,24 +535,13 @@ extension AppDelegate {
                 self.tongueDetector = detector
             }
 
-            let cvOrientation = self.cgImagePropertyOrientation(for: rotation)
-            let request = VNDetectFaceLandmarksRequest { [weak self] req, error in
-                guard let self = self else { return }
-                guard let results = req.results as? [VNFaceObservation] else { return }
-                
-                // For native TongueDetector
-                if let face = results.first {
-                    self.tongueDetector?.processFrame(observation: face, image: uiImage)
-                }
-
-            }
-            
-            do {
-                // To track faces stably across frames we use VNSequenceRequestHandler
-                try self.visionSequenceHandler.perform([request], on: cgImage, orientation: cvOrientation)
-            } catch {
-                NSLog("[TongueChannel] perform error: %@", error.localizedDescription)
-            }
+            self.processFaceFrame(
+                bytes: bytes.data,
+                width: width,
+                height: height,
+                bytesPerRow: bytesPerRow,
+                rotation: rotation
+            )
             
             result(true)
         }
@@ -484,6 +567,8 @@ extension AppDelegate: TongueDetectorDelegate {
 
     func tongueDetector(_ detector: TongueDetector, didCapture jpegData: Data) {
         DispatchQueue.main.async { [weak self] in
+            self?.latestTongueImage = nil
+            self?.lastTongueFrameTime = 0
             self?.tongueCaptureSink?(FlutterStandardTypedData(bytes: jpegData))
             detector.reset()
         }

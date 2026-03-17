@@ -24,6 +24,7 @@ final class TongueDetector {
     private let mouthOpenThreshold: Float  = 0.04   // 上下唇 y 距离
     private let redPixelThreshold:  Double = 0.15   // 红色像素占比
     private let stableFramesNeeded: Int    = 10     // 连续稳定帧数
+    private let tongueBlendshapeThreshold: Float = 0.35
 
     // MARK: State
 
@@ -71,13 +72,18 @@ final class TongueDetector {
         let mouthGap = abs(lowerLip.y - upperLip.y)
         let mouthOpen = mouthGap > mouthOpenThreshold
 
-        // 舌头可见检测（红色像素分析）
+        // 舌头可见检测：优先使用 MediaPipe blendshape，缺失时回退到 ROI 红色像素分析
         var tongueVisible = false
         if mouthOpen {
-            tongueVisible = detectTongueInROI(
-                uiImage: image,
-                landmarks: landmarks
-            )
+            let tongueScoreResult = tongueScore(from: result)
+            if tongueScoreResult.hasScore {
+                tongueVisible = tongueScoreResult.score >= tongueBlendshapeThreshold
+            } else {
+                tongueVisible = detectTongueInROI(
+                    uiImage: image,
+                    landmarks: landmarks
+                )
+            }
         }
 
         // 稳定帧计数
@@ -234,6 +240,20 @@ final class TongueDetector {
         guard let jpeg = finalImage.jpegData(compressionQuality: 0.85) else { return }
 
         delegate?.tongueDetector(self, didCapture: jpeg)
+    }
+
+    private func tongueScore(from result: FaceLandmarkerResult) -> (score: Float, hasScore: Bool) {
+        let allBlendshapes = result.faceBlendshapes
+        guard !allBlendshapes.isEmpty else { return (0, false) }
+
+        guard let score = allBlendshapes
+            .flatMap { $0 }
+            .first(where: { ($0.categoryName ?? "").lowercased() == "tongueout" })?
+            .score else {
+            return (0, false)
+        }
+
+        return (score, true)
     }
 
     // MARK: - 推送引导状态

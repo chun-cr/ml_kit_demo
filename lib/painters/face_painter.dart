@@ -169,6 +169,8 @@ class FacePainter extends CustomPainter {
   // ---------------------------------------------------------------------------
 
   void _drawFaceBoundingBoxes(Canvas canvas, Size size) {
+    if (isIos) return;
+
     final boxPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5
@@ -187,8 +189,10 @@ class FacePainter extends CustomPainter {
         screenRect = Rect.fromLTRB(left, top, right, bottom);
       } else {
         // Android: 直接用 _toScreenOffset（imageSize 已对调宽高）
-        final topLeft     = _toScreenOffset(rect.left.toDouble(),  rect.top.toDouble(),    size);
-        final bottomRight = _toScreenOffset(rect.right.toDouble(), rect.bottom.toDouble(), size);
+        final topLeft =
+            _toScreenOffset(rect.left.toDouble(), rect.top.toDouble(), size);
+        final bottomRight = _toScreenOffset(
+            rect.right.toDouble(), rect.bottom.toDouble(), size);
         screenRect = Rect.fromLTRB(
           topLeft.dx < bottomRight.dx ? topLeft.dx : bottomRight.dx,
           topLeft.dy < bottomRight.dy ? topLeft.dy : bottomRight.dy,
@@ -419,7 +423,7 @@ class FacePainter extends CustomPainter {
 
   // ---------------------------------------------------------------------------
   // iOS: MediaPipe FaceLandmarker 归一化点绘制
-  // 坐标已经是 0~1 归一化，当前原生回传已与预览方向一致，这里不再额外镜像 x
+  // 坐标已经是 0~1 归一化；为匹配 CameraPreview 的 aspectFill，需要做缩放和偏移
   // ---------------------------------------------------------------------------
 
   void _drawIosFaceLandmarks(Canvas canvas, Size size) {
@@ -432,9 +436,7 @@ class FacePainter extends CustomPainter {
     for (final landmarks in iosFaceLandmarks) {
       if (landmarks.isEmpty) continue;
       for (final lm in landmarks) {
-        final x = lm.dx * size.width;
-        final y = lm.dy * size.height;
-        canvas.drawCircle(Offset(x, y), 1.2, dotPaint);
+        canvas.drawCircle(_toIosScreenOffset(lm, size), 1.2, dotPaint);
       }
       _drawIosLipContour(canvas, size, landmarks);
     }
@@ -451,8 +453,7 @@ class FacePainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round;
 
     Offset toScreen(int idx) {
-      final pt = lm[idx];
-      return Offset(pt.dx * size.width, pt.dy * size.height);
+      return _toIosScreenOffset(lm[idx], size);
     }
 
     void drawContour(List<int> indices) {
@@ -472,8 +473,9 @@ class FacePainter extends CustomPainter {
       drawContour(_innerLipContour);
     } else {
       // Apple Vision: outer lips 48-67, inner lips 68-75
-      final visionOuter = List.generate(21, (i) => 48 + i % 20); // Close contour
-      final visionInner = List.generate(9, (i) => 68 + i % 8);   // Close contour
+      final visionOuter =
+          List.generate(21, (i) => 48 + i % 20); // Close contour
+      final visionInner = List.generate(9, (i) => 68 + i % 8); // Close contour
       drawContour(visionOuter);
       drawContour(visionInner);
     }
@@ -481,4 +483,25 @@ class FacePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(FacePainter oldDelegate) => true;
+
+  ({double xOffset, double yOffset, double scaleFactor}) _iosTransform(
+      Size viewSize) {
+    final widthScale = viewSize.width / imageSize.width;
+    final heightScale = viewSize.height / imageSize.height;
+    final scaleFactor = widthScale > heightScale ? widthScale : heightScale;
+    final scaledWidth = imageSize.width * scaleFactor;
+    final scaledHeight = imageSize.height * scaleFactor;
+    final xOffset = (viewSize.width - scaledWidth) / 2;
+    final yOffset = (viewSize.height - scaledHeight) / 2;
+    return (xOffset: xOffset, yOffset: yOffset, scaleFactor: scaleFactor);
+  }
+
+  Offset _toIosScreenOffset(Offset normalizedPoint, Size viewSize) {
+    final transform = _iosTransform(viewSize);
+    final x = normalizedPoint.dx * imageSize.width * transform.scaleFactor +
+        transform.xOffset;
+    final y = normalizedPoint.dy * imageSize.height * transform.scaleFactor +
+        transform.yOffset;
+    return Offset(x, y);
+  }
 }
