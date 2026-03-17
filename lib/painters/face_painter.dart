@@ -441,7 +441,7 @@ class FacePainter extends CustomPainter {
   }
 
   void _drawIosLipContour(Canvas canvas, Size size, List<Offset> lm) {
-    if (lm.length < 409) return;
+    if (lm.length < 76) return;
 
     final paint = Paint()
       ..style = PaintingStyle.stroke
@@ -466,8 +466,17 @@ class FacePainter extends CustomPainter {
       canvas.drawPath(path, paint);
     }
 
-    drawContour(_outerLipContour);
-    drawContour(_innerLipContour);
+    if (lm.length == 478) {
+      // MediaPipe
+      drawContour(_outerLipContour);
+      drawContour(_innerLipContour);
+    } else {
+      // Apple Vision: outer lips 48-67, inner lips 68-75
+      final visionOuter = List.generate(21, (i) => 48 + i % 20); // Close contour
+      final visionInner = List.generate(9, (i) => 68 + i % 8);   // Close contour
+      drawContour(visionOuter);
+      drawContour(visionInner);
+    }
   }
 
   @override

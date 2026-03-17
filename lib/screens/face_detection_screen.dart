@@ -1,21 +1,19 @@
-import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_face_mesh_detection/google_mlkit_face_mesh_detection.dart';
 
 import '../painters/face_painter.dart';
+import '../services/native_face_scan_channel.dart';
 import '../utils/adaptive_throttle.dart';
 import '../utils/camera_utils.dart';
 
 /// 自包含的面部检测页面：相机 + 检测器 + 描点绘制
 ///
 /// Android：使用 google_mlkit_face_detection + google_mlkit_face_mesh_detection
-/// iOS：使用 google_mlkit_face_detection + MediaPipe FaceLandmarker (via platform channel)
+/// iOS：打开原生 Swift + Vision 扫脸页面，并仅接收最终结果
 class FaceDetectionScreen extends StatefulWidget {
   const FaceDetectionScreen({super.key});
 
@@ -35,26 +33,12 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   FaceDetector? _faceDetector;
   FaceMeshDetector? _faceMeshDetector;
 
-  // ── iOS: MediaPipe FaceLandmarker via platform channel ─────
-  static const _iosFaceFrameChannel = MethodChannel('face/frame');
-  static const _iosFaceMeshChannel  = EventChannel('face/mesh/stream');
-  StreamSubscription? _iosFaceMeshSubscription;
-
-  // iOS FaceLandmarker 结果：每张脸 478 个归一化坐标点
-  // 格式：List<List<Offset>>，与 _meshes 用途相同但来源不同
-  List<List<Offset>> _iosFaceLandmarks = [];
-  List<List<Offset>> _lastGoodIosFaceLandmarks = [];
-  // EMA 平滑后的持久状态（每个点的上一帧平滑结果）
-  List<List<Offset>> _smoothedLandmarks = [];
-  // EMA 平滑因子：越小越平滑但延迟越大，0.35 在流畅与响应间取得平衡
-  static const double _emaAlpha = 0.35;
-  // 单点帧间最大跳变阈值（归一化坐标），超过则视为异常飞点
-  static const double _outlierThreshold = 0.06;
-  int _emptyFrameCount = 0;
-  static const int _maxEmptyFrames = 15;
-
   // ── 整体初始化状态 ──────────────────────────────────────────
   bool _isInitialized = false;
+  bool _didAutoLaunchNativeScan = false;
+  bool _nativeScanBusy = false;
+  String _nativeScanStatus = '等待开始';
+  String _nativeScanSummary = 'iOS 使用原生 Swift 扫脸，不再通过 Flutter 逐帧传图。';
 
   // ── 检测结果 ────────────────────────────────────────────────
   List<Face> _faces = [];
@@ -74,13 +58,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     adaptive: false,
   );
 
-  // ── iOS 帧发送节流（与手势识别共享同一套逻辑）──────────────
-  final _iosFaceThrottle = AdaptiveThrottle(
-    minInterval: 33,
-    maxInterval: 100,
-    targetProcessTime: 80,
-  );
-
   // ── Lifecycle ─────────────────────────────────────────────────
 
   @override
@@ -88,14 +65,24 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     if (Platform.isIOS) {
-      _listenIosFaceMeshStream();
+      _isInitialized = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_didAutoLaunchNativeScan && mounted) {
+          _didAutoLaunchNativeScan = true;
+          _launchNativeIosFaceScan();
+        }
+      });
+      return;
     }
+
     _initAll();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_isDisposed) return;
+    if (Platform.isIOS) return;
+
     switch (state) {
       case AppLifecycleState.inactive:
         break;
@@ -114,13 +101,60 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   void dispose() {
     _isDisposed = true;
     WidgetsBinding.instance.removeObserver(this);
-    _iosFaceMeshSubscription?.cancel();
-    _stopStream();
-    _cameraController?.dispose();
-    _cameraController = null;
-    _faceDetector?.close();
-    _faceMeshDetector?.close();
+    if (!Platform.isIOS) {
+      _stopStream();
+      _cameraController?.dispose();
+      _cameraController = null;
+      _faceDetector?.close();
+      _faceMeshDetector?.close();
+    }
     super.dispose();
+  }
+
+  Future<void> _launchNativeIosFaceScan() async {
+    if (!Platform.isIOS || _nativeScanBusy) return;
+
+    setState(() {
+      _nativeScanBusy = true;
+      _nativeScanStatus = '正在打开原生扫脸…';
+    });
+
+    try {
+      final result = await NativeFaceScanChannel.startScan();
+      if (!mounted) return;
+
+      final cancelled = (result?['cancelled'] as bool?) ?? false;
+      final completed = (result?['completed'] as bool?) ?? false;
+      final stableFrames = result?['stableFrames'];
+      final landmarkCount = result?['landmarkCount'];
+      final hint = (result?['hint'] as String?) ?? '';
+
+      setState(() {
+        if (cancelled) {
+          _nativeScanStatus = '已取消';
+          _nativeScanSummary = '原生扫脸已关闭，你可以重新开始。';
+        } else if (completed) {
+          _nativeScanStatus = '扫描完成';
+          _nativeScanSummary =
+              '稳定帧数：${stableFrames ?? '-'}，特征点数：${landmarkCount ?? '-'}${hint.isNotEmpty ? '，状态：$hint' : ''}';
+        } else {
+          _nativeScanStatus = '未完成';
+          _nativeScanSummary = hint.isNotEmpty ? hint : '本次没有拿到有效扫脸结果。';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _nativeScanStatus = '打开失败';
+        _nativeScanSummary = '原生扫脸启动失败：$e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _nativeScanBusy = false;
+        });
+      }
+    }
   }
 
   // ── 释放相机资源 ──────────────────────────────────────────────
@@ -199,215 +233,13 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
     );
   }
 
-  // ── iOS: 监听 FaceLandmarker 结果 ──────────────────────────
-  void _listenIosFaceMeshStream() {
-    _iosFaceMeshSubscription =
-        _iosFaceMeshChannel.receiveBroadcastStream().listen(
-      (event) {
-        if (_isDisposed || !mounted) return;
-        if (event is! Map) return;
-        final facesRaw = event['faces'];
-        if (facesRaw is! List) {
-          _smoothedLandmarks = [];
-          _lastGoodIosFaceLandmarks = [];
-          setState(() {
-            _iosFaceLandmarks = [];
-            _faceCount = 0;
-          });
-          return;
-        }
-        final parsed = <List<Offset>>[];
-        for (final face in facesRaw) {
-          if (face is! List) continue;
-          final pts = <Offset>[];
-          for (final pt in face) {
-            if (pt is Map) {
-              final x = (pt['x'] as num?)?.toDouble() ?? 0.0;
-              final y = (pt['y'] as num?)?.toDouble() ?? 0.0;
-              pts.add(Offset(x, y));
-            }
-          }
-          if (pts.isNotEmpty && _isLandmarkSetValid(pts)) {
-            parsed.add(pts);
-          }
-        }
-        final stableParsed = _filterUnstableLandmarks(parsed);
-        if (stableParsed.isEmpty) {
-          _emptyFrameCount++;
-          if (_emptyFrameCount >= _maxEmptyFrames) {
-            _smoothedLandmarks = [];
-            _lastGoodIosFaceLandmarks = [];
-            setState(() {
-              _iosFaceLandmarks = [];
-              _faceCount = 0;
-            });
-          }
-        } else {
-          _emptyFrameCount = 0;
-          final smoothed = _smoothLandmarksEMA(stableParsed);
-          _lastGoodIosFaceLandmarks = smoothed
-              .map((face) => List<Offset>.from(face))
-              .toList();
-          setState(() {
-            _iosFaceLandmarks = smoothed;
-            _faceCount = smoothed.length;
-          });
-        }
-      },
-      onError: (e) => debugPrint('[FaceMeshChannel] error: $e'),
-    );
-  }
-
-  /// Returns true if landmark set looks valid (points spread across a reasonable area)
-  bool _isLandmarkSetValid(List<Offset> landmarks) {
-    if (landmarks.length < 100) return false;
-
-    double minX = double.infinity, maxX = 0;
-    double minY = double.infinity, maxY = 0;
-
-    for (final pt in landmarks) {
-      if (pt.dx < minX) minX = pt.dx;
-      if (pt.dx > maxX) maxX = pt.dx;
-      if (pt.dy < minY) minY = pt.dy;
-      if (pt.dy > maxY) maxY = pt.dy;
-    }
-
-    final spreadX = maxX - minX;
-    final spreadY = maxY - minY;
-
-    // Valid face landmarks should spread at least 5% of the normalized image in both axes
-    return spreadX > 0.05 && spreadY > 0.05;
-  }
-
-  List<List<Offset>> _filterUnstableLandmarks(List<List<Offset>> candidates) {
-    if (_lastGoodIosFaceLandmarks.isEmpty ||
-        _lastGoodIosFaceLandmarks.length != candidates.length) {
-      return candidates;
-    }
-
-    final filtered = <List<Offset>>[];
-    for (int i = 0; i < candidates.length; i++) {
-      final candidate = candidates[i];
-      final previous = _lastGoodIosFaceLandmarks[i];
-      if (_isLandmarkTransitionStable(previous, candidate)) {
-        filtered.add(candidate);
-      }
-    }
-    return filtered;
-  }
-
-  bool _isLandmarkTransitionStable(
-    List<Offset> previous,
-    List<Offset> candidate,
-  ) {
-    if (previous.length < 100 || candidate.length < 100) return false;
-
-    final previousBounds = _computeLandmarkBounds(previous);
-    final candidateBounds = _computeLandmarkBounds(candidate);
-
-    final previousCenter = previousBounds.center;
-    final candidateCenter = candidateBounds.center;
-    final centerShift = (candidateCenter - previousCenter).distance;
-
-    final previousWidth = previousBounds.width;
-    final previousHeight = previousBounds.height;
-    final candidateWidth = candidateBounds.width;
-    final candidateHeight = candidateBounds.height;
-
-    if (previousWidth <= 0 || previousHeight <= 0) return true;
-
-    final widthRatio = candidateWidth / previousWidth;
-    final heightRatio = candidateHeight / previousHeight;
-
-    // 放宽整体边界阈值，由 EMA + 单点异常值过滤来精细处理飞点；
-    // 这里只拦截真正的"幽灵帧"（面部突然跳到完全不同的位置）。
-    return centerShift < 0.20 &&
-        widthRatio > 0.55 &&
-        widthRatio < 1.5 &&
-        heightRatio > 0.55 &&
-        heightRatio < 1.5;
-  }
-
-  Rect _computeLandmarkBounds(List<Offset> landmarks) {
-    double minX = double.infinity;
-    double maxX = double.negativeInfinity;
-    double minY = double.infinity;
-    double maxY = double.negativeInfinity;
-
-    for (final pt in landmarks) {
-      if (pt.dx < minX) minX = pt.dx;
-      if (pt.dx > maxX) maxX = pt.dx;
-      if (pt.dy < minY) minY = pt.dy;
-      if (pt.dy > maxY) maxY = pt.dy;
-    }
-
-    return Rect.fromLTRB(minX, minY, maxX, maxY);
-  }
-
-  /// EMA 平滑 + 单点异常值过滤
-  ///
-  /// 相比旧版 N 帧算术平均，EMA 有两个优势：
-  /// 1. 不需要维护历史缓冲区，只需上一帧平滑结果
-  /// 2. 单点异常值检测可以精准过滤"飞点"而不丢弃整帧
-  List<List<Offset>> _smoothLandmarksEMA(List<List<Offset>> newFrameLandmarks) {
-    // 首次检测或人脸数量变化 → 直接用原始值初始化
-    if (_smoothedLandmarks.isEmpty ||
-        _smoothedLandmarks.length != newFrameLandmarks.length) {
-      _smoothedLandmarks = newFrameLandmarks
-          .map((face) => List<Offset>.from(face))
-          .toList();
-      return _smoothedLandmarks;
-    }
-
-    final result = <List<Offset>>[];
-    for (int f = 0; f < newFrameLandmarks.length; f++) {
-      final newFace = newFrameLandmarks[f];
-      final prevFace = _smoothedLandmarks[f];
-      final smoothedFace = <Offset>[];
-      final pointCount = newFace.length;
-
-      for (int p = 0; p < pointCount; p++) {
-        if (p < prevFace.length) {
-          final prev = prevFace[p];
-          final curr = newFace[p];
-          final delta = (curr - prev).distance;
-
-          if (delta > _outlierThreshold) {
-            // 异常飞点：几乎保持上一帧的值，只允许极微小的漂移
-            // 这样即使是真的大幅移动，也会在后续帧中逐渐跟上
-            smoothedFace.add(Offset(
-              prev.dx + (curr.dx - prev.dx) * 0.05,
-              prev.dy + (curr.dy - prev.dy) * 0.05,
-            ));
-          } else {
-            // 正常范围：EMA 指数移动平均
-            smoothedFace.add(Offset(
-              prev.dx * (1 - _emaAlpha) + curr.dx * _emaAlpha,
-              prev.dy * (1 - _emaAlpha) + curr.dy * _emaAlpha,
-            ));
-          }
-        } else {
-          smoothedFace.add(newFace[p]);
-        }
-      }
-      result.add(smoothedFace);
-    }
-
-    _smoothedLandmarks = result;
-    return result;
-  }
-
   // ── Image stream ──────────────────────────────────────────────
   void _startStream() {
     final controller = _cameraController;
     if (controller == null || !controller.value.isInitialized) return;
     if (controller.value.isStreamingImages) return;
     try {
-      if (Platform.isIOS) {
-        controller.startImageStream(_processImageIos);
-      } else {
-        controller.startImageStream(_processImageAndroid);
-      }
+      controller.startImageStream(_processImageAndroid);
     } catch (e) {
       debugPrint('[FaceDetection] Failed to start stream: $e');
     }
@@ -419,87 +251,6 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
         _cameraController?.stopImageStream();
       }
     } catch (_) {}
-  }
-
-  // ── iOS 帧处理：发送到原生 FaceLandmarker + ML Kit 人脸检测 ──
-  Future<void> _processImageIos(CameraImage image) async {
-    if (_isDisposed) return;
-    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
-
-    // 描点刷新
-    if (_paintThrottle.shouldProcess()) {
-      if (mounted) setState(() {});
-    }
-
-    if (!_iosFaceThrottle.shouldProcess()) return;
-    _iosFaceThrottle.setProcessing(true);
-    final startTime = DateTime.now().millisecondsSinceEpoch;
-
-    try {
-      // iOS BGRA8888: 单平面，必须传 bytesPerRow （包含 stride padding）
-      final plane = image.planes.first;
-      final bytes = plane.bytes;
-      final bytesPerRow = plane.bytesPerRow;
-      // sensorOrientation 在 iOS 上是正确的旋转补偿值（与 camera_utils.dart 一致）
-      final rotation = _cameraController!.description.sensorOrientation;
-
-      // 同时发送给 ML Kit（人脸检测框 + 表情）和 FaceLandmarker（特征点）
-      await Future.wait([
-        _sendToMlKitIos(image),
-        _iosFaceFrameChannel.invokeMethod('processFrame', {
-          'bytes': bytes,
-          'width': image.width,
-          'height': image.height,
-          'bytesPerRow': bytesPerRow,
-          'rotation': rotation,
-        }),
-      ]);
-    } catch (e) {
-      debugPrint('[FaceDetection iOS] error: $e');
-    } finally {
-      final cost = DateTime.now().millisecondsSinceEpoch - startTime;
-      _iosFaceThrottle.recordProcessTime(cost);
-      _iosFaceThrottle.setProcessing(false);
-    }
-  }
-
-  Future<void> _sendToMlKitIos(CameraImage image) async {
-    _faceDetector ??= FaceDetector(
-      options: FaceDetectorOptions(
-        enableClassification: true,
-        enableContours: false,
-        enableLandmarks: false,
-        enableTracking: true,
-        performanceMode: FaceDetectorMode.fast,
-      ),
-    );
-    try {
-      final inputImage = cameraImageToInputImage(
-        image,
-        _camera!,
-        _cameraController!.value.deviceOrientation,
-      );
-      if (inputImage == null) return;
-
-      // iOS: ML Kit 内部已处理旋转，boundingBox 坐标基于原始传感器尺寸
-      // （像素坐标，不需要对调宽高）。对调会导致坐标映射错误，人脸框偏移。
-      // Android: sensorOrientation=90/270 时需要对调，因为返回坐标是旋转后的。
-      final rawSize = inputImage.metadata!.size;
-      final so = _camera!.sensorOrientation;
-      _imageSize = (!Platform.isIOS && (so == 90 || so == 270))
-          ? Size(rawSize.height, rawSize.width)
-          : rawSize;
-
-      final faces = await _faceDetector!.processImage(inputImage);
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _faces = faces;
-          // faceCount 由 FaceLandmarker 结果决定，这里只更新检测框
-        });
-      }
-    } catch (e) {
-      debugPrint('[FaceDetection iOS MLKit] error: $e');
-    }
   }
 
   // ── Android 帧处理（原逻辑不变）────────────────────────────
@@ -559,6 +310,8 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (Platform.isIOS) return _buildIosNativeView();
+
     if (_errorMessage != null) return _buildErrorView();
     if (!_isInitialized ||
         _cameraController == null ||
@@ -566,6 +319,150 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
       return _buildLoadingView();
     }
     return _buildMainView();
+  }
+
+  Widget _buildIosNativeView() {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A0F),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF00C9FF), Color(0xFF92FE9D)],
+                  ),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.face_retouching_natural_rounded,
+                        color: Colors.white, size: 16),
+                    SizedBox(width: 6),
+                    Text(
+                      '原生面部扫描',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(28),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        const Color(0xFF00C9FF).withValues(alpha: 0.12),
+                        const Color(0xFF92FE9D).withValues(alpha: 0.04),
+                      ],
+                    ),
+                    border: Border.all(
+                      color: const Color(0xFF00C9FF).withValues(alpha: 0.18),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'iOS 已切换为原生 Swift 扫脸',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '相机采集、Vision 描点、稳定帧判断和引导文案都在原生层完成，Flutter 只负责打开页面和接收最终结果。',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          height: 1.5,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      _buildNativeStatusCard(),
+                      const Spacer(),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _nativeScanBusy ? null : _launchNativeIosFaceScan,
+                          icon: _nativeScanBusy
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.center_focus_strong_rounded),
+                          label: Text(_nativeScanBusy ? '正在打开…' : '开始原生扫脸'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF00C9FF),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            textStyle: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNativeStatusCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _nativeScanStatus,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _nativeScanSummary,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+              height: 1.5,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildErrorView() {
@@ -630,12 +527,9 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildMainView() {
-    // iOS 用 FaceLandmarker 点数，Android 用 ML Kit 结果
-    final displayCount = Platform.isIOS ? _iosFaceLandmarks.length : _faceCount;
-    final hasMesh = Platform.isIOS
-        ? _iosFaceLandmarks.isNotEmpty
-        : _meshes.isNotEmpty;
-    final meshLabel = Platform.isIOS ? '478 特征点' : '468 特征点';
+    final displayCount = _faceCount;
+    final hasMesh = _meshes.isNotEmpty;
+    const meshLabel = '468 特征点';
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0F),
@@ -701,22 +595,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                           fit: StackFit.expand,
                           children: [
                             CameraPreview(_cameraController!),
-                            // 绘制层：iOS 用 FaceLandmarker 点，Android 用 ML Kit
-                            if (Platform.isIOS)
-                              Positioned.fill(
-                                child: CustomPaint(
-                                  painter: FacePainter(
-                                    faces: _faces,
-                                    meshes: const [],
-                                    iosFaceLandmarks: _iosFaceLandmarks,
-                                    imageSize: _imageSize ?? const Size(1, 1),
-                                    cameraLensDirection: _camera!.lensDirection,
-                                    sensorOrientation: _camera!.sensorOrientation,
-                                    isIos: true,
-                                  ),
-                                ),
-                              )
-                            else if (_imageSize != null)
+                            if (_imageSize != null)
                               CustomPaint(
                                 painter: FacePainter(
                                   faces: _faces,
@@ -732,7 +611,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
                               top: 10,
                               right: 10,
                               child: Text(
-                                '检测间隔: ${Platform.isIOS ? _iosFaceThrottle.currentInterval : _detectThrottle.currentInterval}ms',
+                                '检测间隔: ${_detectThrottle.currentInterval}ms',
                                 style: const TextStyle(color: Colors.green, fontSize: 12),
                               ),
                             ),
@@ -790,7 +669,7 @@ class _FaceDetectionScreenState extends State<FaceDetectionScreen>
   }
 
   Widget _buildStatusDot() {
-    final isActive = Platform.isIOS ? _iosFaceLandmarks.isNotEmpty : _faceCount > 0;
+    final isActive = _faceCount > 0;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
